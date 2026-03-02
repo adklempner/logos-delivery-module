@@ -4,6 +4,8 @@
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QTimer>
 #include <semaphore>
 
 #include "api_call_handler.h"
@@ -11,6 +13,8 @@
 // liblogosdelivery provides a high-level message-delivery API
 extern "C" {
 #include <liblogosdelivery.h>
+void logosdelivery_push_roots(void* ctx, const char* rootsJson);
+void logosdelivery_push_proof(void* ctx, const char* proofJson);
 }
 
 DeliveryModulePlugin::DeliveryModulePlugin() : deliveryCtx(nullptr)
@@ -197,23 +201,31 @@ bool DeliveryModulePlugin::createNode(const QString &cfg)
 bool DeliveryModulePlugin::start()
 {
     qDebug() << "DeliveryModulePlugin::start called";
-    
+
     if (!deliveryCtx) {
         qWarning() << "DeliveryModulePlugin: Cannot start Messaging - context not initialized. Call createNode first.";
         return false;
     }
-    
-    auto outcome = callApiRetVoid(
-        "start",
-        CALLBACK_TIMEOUT,
-        bindApiCall(logosdelivery_start_node, deliveryCtx));
 
-    if (outcome.isErr()) {
-        qWarning() << "DeliveryModulePlugin: Start failed:" << outcome.error();
+    // Fire-and-forget: the FFI thread starts the Waku node asynchronously.
+    // We cannot block here because the start_node handler awaits peer connections
+    // which may take longer than logoscore's -c IPC timeout (20s).
+    auto callback = +[](int callerRet, const char* msg, size_t len, void*) {
+        if (callerRet != 0) {
+            QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "unknown error";
+            qWarning() << "DeliveryModulePlugin: Async start completed with error:" << message;
+        } else {
+            qDebug() << "DeliveryModulePlugin: Async start completed successfully";
+        }
+    };
+
+    int ret = logosdelivery_start_node(deliveryCtx, callback, nullptr);
+    if (ret != 0) {
+        qWarning() << "DeliveryModulePlugin: Failed to initiate start";
         return false;
     }
 
-    qDebug() << "DeliveryModulePlugin: Messaging start completed with success: true";
+    qDebug() << "DeliveryModulePlugin: Start initiated (async)";
     return true;
 }
 
@@ -394,3 +406,102 @@ QString DeliveryModulePlugin::getAvailableConfigs() {
 
     return outcome.value();
 }
+
+int DeliveryModulePlugin::rln_fetcher(const char* method, const char* params,
+    void (*callback)(int, const char*, size_t, void*), void* callbackData, void* fetcherData)
+{
+    auto* plugin = static_cast<DeliveryModulePlugin*>(fetcherData);
+    if (!plugin || !plugin->logosAPI) {
+        if (callback) callback(1, "LogosAPI not available", 21, callbackData);
+        return 1;
+    }
+
+    auto* rlnClient = plugin->logosAPI->getClient("liblogos_rln_module");
+    if (!rlnClient) {
+        if (callback) callback(1, "RLN module not available", 24, callbackData);
+        return 1;
+    }
+
+    QString methodStr(method);
+    QString paramsStr(params);
+
+    if (methodStr == "get_valid_roots") {
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "get_valid_roots", QVariant(paramsStr));
+        QByteArray utf8 = result.toString().toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
+    if (methodStr == "get_merkle_proofs") {
+        QStringList parts = paramsStr.split(",");
+        if (parts.size() < 2) {
+            if (callback) callback(1, "Expected configAccountId,leafIndex", 35, callbackData);
+            return 1;
+        }
+        QString configAccount = parts[0];
+        QString leafIndicesJson = "[" + parts[1] + "]";
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "get_merkle_proofs",
+            QVariant(configAccount), QVariant(leafIndicesJson));
+        QString proofsJson = result.toString();
+
+        QJsonArray arr = QJsonDocument::fromJson(proofsJson.toUtf8()).array();
+        if (arr.isEmpty()) {
+            if (callback) callback(1, "Empty proof array", 17, callbackData);
+            return 1;
+        }
+        QByteArray singleProof = QJsonDocument(arr[0].toObject()).toJson(QJsonDocument::Compact);
+        if (callback) callback(0, singleProof.constData(), singleProof.size(), callbackData);
+        return 0;
+    }
+
+    if (callback) callback(1, "Unknown method", 14, callbackData);
+    return 1;
+}
+
+bool DeliveryModulePlugin::setRlnConfig(const QString& configAccountId, int leafIndex)
+{
+    if (!deliveryCtx) {
+        qWarning() << "DeliveryModulePlugin: Cannot set RLN config - context not initialized";
+        return false;
+    }
+
+    logosdelivery_set_rln_fetcher(deliveryCtx, rln_fetcher, this);
+    logosdelivery_set_rln_config(deliveryCtx, configAccountId.toUtf8().constData(), leafIndex);
+
+    // Event subscription is deferred to avoid blocking the -c call
+    // The RLN module broadcasts roots/proofs on a timer; we subscribe after a delay
+    if (logosAPI) {
+        void* ctx = deliveryCtx;
+        auto* api = logosAPI;
+        QTimer::singleShot(5000, [ctx, api]() {
+            auto* rlnConsumer = new LogosAPIConsumer("liblogos_rln_module", "delivery_module",
+                                                      api->getTokenManager());
+            QObject* rlnReplica = rlnConsumer->requestObject("liblogos_rln_module");
+            if (rlnReplica) {
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "valid_roots",
+                    [ctx](const QString& eventName, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_roots(ctx, utf8.constData());
+                    });
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "merkle_proof",
+                    [ctx](const QString& eventName, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_proof(ctx, utf8.constData());
+                    });
+                qDebug() << "DeliveryModulePlugin: Subscribed to RLN module events";
+            } else {
+                qWarning() << "DeliveryModulePlugin: Could not get RLN module replica";
+            }
+        });
+    }
+
+    qDebug() << "DeliveryModulePlugin: RLN config set, account:" << configAccountId << "leaf:" << leafIndex;
+    return true;
+}
+

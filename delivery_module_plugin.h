@@ -5,6 +5,7 @@
 #include "delivery_module_interface.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_api_consumer.h"
 
 /**
  * @brief Concrete Qt plugin implementing the delivery messaging module.
@@ -198,6 +199,8 @@ public:
      */
     Q_INVOKABLE QString getAvailableConfigs() override;
 
+    Q_INVOKABLE bool setRlnConfig(const QString& configAccountId, int leafIndex) override;
+
     QString name() const override { return "delivery_module"; }
 
     QString version() const;
@@ -254,4 +257,7 @@ private:
      * @param userData Opaque pointer expected to be `DeliveryModulePlugin*`.
      */
     static void event_callback(int callerRet, const char* msg, size_t len, void* userData);
+
+    static int rln_fetcher(const char* method, const char* params,
+        void (*callback)(int, const char*, size_t, void*), void* callbackData, void* fetcherData);
 };
