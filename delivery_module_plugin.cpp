@@ -505,3 +505,32 @@ bool DeliveryModulePlugin::setRlnConfig(const QString& configAccountId, int leaf
     return true;
 }
 
+bool DeliveryModulePlugin::sendTest(const QString& contentTopic, const QString& payload)
+{
+    if (!deliveryCtx) {
+        qWarning() << "DeliveryModulePlugin: sendTest - context not initialized";
+        return false;
+    }
+
+    QJsonObject messageObj;
+    messageObj["contentTopic"] = contentTopic;
+    messageObj["payload"] = QString::fromUtf8(payload.toUtf8().toBase64());
+    messageObj["ephemeral"] = false;
+
+    QJsonDocument doc(messageObj);
+    QByteArray messageJson = doc.toJson(QJsonDocument::Compact);
+
+    auto outcome = callApiRetValue<QString>(
+        "sendTest",
+        CALLBACK_TIMEOUT,
+        bindApiCall(logosdelivery_send, deliveryCtx, messageJson.constData()));
+
+    if (outcome.isErr()) {
+        qWarning() << "sendTest failed:" << outcome.error();
+        return false;
+    }
+
+    qDebug() << "sendTest success, requestId:" << outcome.value();
+    return true;
+}
+

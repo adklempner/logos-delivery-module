@@ -201,6 +201,8 @@ public:
 
     Q_INVOKABLE bool setRlnConfig(const QString& configAccountId, int leafIndex) override;
 
+    Q_INVOKABLE bool sendTest(const QString& contentTopic, const QString& payload);
+
     QString name() const override { return "delivery_module"; }
 
     QString version() const;
