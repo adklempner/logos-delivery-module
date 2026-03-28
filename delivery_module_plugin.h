@@ -172,6 +172,9 @@ public:
      */
     Q_INVOKABLE QExpected<QString> send(const QString &contentTopic, const QString &payload) override;
 
+    /// Simplified send for logoscore -c calls (returns bool instead of QExpected)
+    Q_INVOKABLE bool sendTest(const QString& contentTopic, const QString& payload);
+
     /**
      * @brief Subscribes to the supplied content topic.
      * @param contentTopic Topic identifier.
