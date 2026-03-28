@@ -512,25 +512,29 @@ bool DeliveryModulePlugin::sendTest(const QString& contentTopic, const QString& 
         return false;
     }
 
-    QJsonObject messageObj;
-    messageObj["contentTopic"] = contentTopic;
-    messageObj["payload"] = QString::fromUtf8(payload.toUtf8().toBase64());
-    messageObj["ephemeral"] = false;
+    void* ctx = deliveryCtx;
+    QTimer::singleShot(5000, [ctx, contentTopic, payload]() {
+        QJsonObject messageObj;
+        messageObj["contentTopic"] = contentTopic;
+        messageObj["payload"] = QString::fromUtf8(payload.toUtf8().toBase64());
+        messageObj["ephemeral"] = false;
 
-    QJsonDocument doc(messageObj);
-    QByteArray messageJson = doc.toJson(QJsonDocument::Compact);
+        QJsonDocument doc(messageObj);
+        QByteArray messageJson = doc.toJson(QJsonDocument::Compact);
 
-    auto outcome = callApiRetValue<QString>(
-        "sendTest",
-        CALLBACK_TIMEOUT,
-        bindApiCall(logosdelivery_send, deliveryCtx, messageJson.constData()));
+        auto callback = +[](int callerRet, const char* msg, size_t len, void*) {
+            if (callerRet != 0) {
+                QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "unknown error";
+                qWarning() << "sendTest result: error -" << message;
+            } else {
+                QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "";
+                qDebug() << "sendTest result: success, requestId:" << message;
+            }
+        };
 
-    if (outcome.isErr()) {
-        qWarning() << "sendTest failed:" << outcome.error();
-        return false;
-    }
-
-    qDebug() << "sendTest success, requestId:" << outcome.value();
+        qDebug() << "sendTest: sending deferred message";
+        logosdelivery_send(ctx, callback, nullptr, messageJson.constData());
+    });
     return true;
 }
 
