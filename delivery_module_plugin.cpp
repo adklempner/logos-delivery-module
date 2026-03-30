@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QTimer>
+#include <QRandomGenerator>
 #include <semaphore>
 
 #include "api_call_handler.h"
@@ -456,6 +457,54 @@ int DeliveryModulePlugin::rln_fetcher(const char* method, const char* params,
         return 0;
     }
 
+    if (methodStr == "generate_identity") {
+        // params: wallet_account_id
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "generate_identity", QVariant(paramsStr));
+        QString resultJson = result.toString();
+        if (resultJson.isEmpty()) {
+            if (callback) callback(1, "generate_identity failed", 24, callbackData);
+            return 1;
+        }
+        QByteArray utf8 = resultJson.toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
+    if (methodStr == "register_member") {
+        // params: JSON object with configAccountId, userHoldingAccountId, idCommitment, rateLimit
+        QJsonDocument paramsDoc = QJsonDocument::fromJson(paramsStr.toUtf8());
+        if (!paramsDoc.isObject()) {
+            if (callback) callback(1, "Expected JSON object params", 27, callbackData);
+            return 1;
+        }
+        QJsonObject paramsObj = paramsDoc.object();
+        QString configAccountId = paramsObj["configAccountId"].toString();
+        QString userHoldingAccountId = paramsObj["userHoldingAccountId"].toString();
+        QString idCommitment = paramsObj["idCommitment"].toString();
+        quint64 rateLimit = static_cast<quint64>(paramsObj["rateLimit"].toDouble());
+
+        if (configAccountId.isEmpty() || userHoldingAccountId.isEmpty() || idCommitment.isEmpty()) {
+            if (callback) callback(1, "Missing required params", 23, callbackData);
+            return 1;
+        }
+
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "register_member",
+            QVariant(configAccountId),
+            QVariant(userHoldingAccountId),
+            QVariant(idCommitment),
+            QVariant(rateLimit));
+        QString resultJson = result.toString();
+        if (resultJson.isEmpty()) {
+            if (callback) callback(1, "register_member failed", 22, callbackData);
+            return 1;
+        }
+        QByteArray utf8 = resultJson.toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
     if (callback) callback(1, "Unknown method", 14, callbackData);
     return 1;
 }
@@ -503,6 +552,80 @@ bool DeliveryModulePlugin::setRlnConfig(const QString& configAccountId, int leaf
 
     qDebug() << "DeliveryModulePlugin: RLN config set, account:" << configAccountId << "leaf:" << leafIndex;
     return true;
+}
+
+QString DeliveryModulePlugin::selfRegisterRln(const QString& configAccountId,
+                                               const QString& walletAccountId,
+                                               int rateLimit)
+{
+    if (!logosAPI) {
+        qWarning() << "selfRegisterRln: logosAPI not initialized";
+        return {};
+    }
+
+    auto* rlnClient = logosAPI->getClient("liblogos_rln_module");
+    if (!rlnClient) {
+        qWarning() << "selfRegisterRln: RLN module not available";
+        return {};
+    }
+
+    // Step 1: Generate identity from a random seed
+    QByteArray seedBytes(32, 0);
+    for (int i = 0; i < 32; ++i)
+        seedBytes[i] = static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
+    QString seed = QString::fromLatin1(seedBytes.toHex());
+
+    qDebug() << "selfRegisterRln: generating identity with seed" << seed.left(16) << "...";
+    QVariant genResult = rlnClient->invokeRemoteMethod(
+        "liblogos_rln_module", "generate_identity", QVariant(seed));
+    QString genJson = genResult.toString();
+    if (genJson.isEmpty()) {
+        qWarning() << "selfRegisterRln: generate_identity failed";
+        return {};
+    }
+
+    QJsonDocument genDoc = QJsonDocument::fromJson(genJson.toUtf8());
+    QString idCommitment = genDoc.object()["id_commitment"].toString();
+    QString idSecretHash = genDoc.object()["id_secret_hash"].toString();
+    if (idCommitment.isEmpty() || idSecretHash.isEmpty()) {
+        qWarning() << "selfRegisterRln: failed to parse identity" << genJson;
+        return {};
+    }
+    qDebug() << "selfRegisterRln: identity generated, commitment:" << idCommitment.left(16) << "...";
+
+    // Step 2: Register membership
+    qDebug() << "selfRegisterRln: registering member...";
+    QVariant regResult = rlnClient->invokeRemoteMethod(
+        "liblogos_rln_module", "register_member",
+        QVariant(configAccountId), QVariant(walletAccountId),
+        QVariant(idCommitment), QVariant(rateLimit));
+    QString regJson = regResult.toString();
+    if (regJson.isEmpty()) {
+        qWarning() << "selfRegisterRln: register_member failed";
+        return {};
+    }
+
+    QJsonDocument regDoc = QJsonDocument::fromJson(regJson.toUtf8());
+    int leafIndex = static_cast<int>(regDoc.object()["leaf_index"].toDouble());
+    qDebug() << "selfRegisterRln: registered at leaf" << leafIndex;
+
+    // Step 3: Wire credentials via setRlnConfig
+    if (!setRlnConfig(configAccountId, leafIndex)) {
+        qWarning() << "selfRegisterRln: setRlnConfig failed";
+        return {};
+    }
+
+    // Step 4: Set identity credentials on the group manager
+    if (deliveryCtx) {
+        logosdelivery_set_rln_identity(deliveryCtx, idSecretHash.toUtf8().constData());
+    }
+
+    // Return result
+    QJsonObject result;
+    result["id_secret_hash"] = idSecretHash;
+    result["id_commitment"] = idCommitment;
+    result["leaf_index"] = leafIndex;
+    return QJsonDocument(result).toJson(QJsonDocument::Compact);
 }
 
 bool DeliveryModulePlugin::sendTest(const QString& contentTopic, const QString& payload)

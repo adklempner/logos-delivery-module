@@ -204,6 +204,12 @@ public:
 
     Q_INVOKABLE bool setRlnConfig(const QString& configAccountId, int leafIndex) override;
 
+    /// Self-register as an RLN member via the RLN module's gifter service.
+    /// Returns JSON: {id_secret_hash, id_commitment, leaf_index} or empty on failure.
+    Q_INVOKABLE QString selfRegisterRln(const QString& configAccountId,
+                                         const QString& walletAccountId,
+                                         int rateLimit) override;
+
     QString name() const override { return "delivery_module"; }
 
     QString version() const;

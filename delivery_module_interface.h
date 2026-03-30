@@ -18,6 +18,9 @@ public:
     Q_INVOKABLE virtual QString getNodeInfo(const QString &nodeInfoId) = 0;
     Q_INVOKABLE virtual QString getAvailableConfigs() = 0;
     Q_INVOKABLE virtual bool setRlnConfig(const QString& configAccountId, int leafIndex) = 0;
+    Q_INVOKABLE virtual QString selfRegisterRln(const QString& configAccountId,
+                                                 const QString& walletAccountId,
+                                                 int rateLimit) = 0;
 
 signals:
     void eventResponse(const QString& eventName, const QVariantList& data);
