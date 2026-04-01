@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QTimer>
 #include <QRandomGenerator>
+#include <QThread>
 #include <semaphore>
 
 #include "api_call_handler.h"
@@ -196,6 +197,39 @@ bool DeliveryModulePlugin::createNode(const QString &cfg)
     
     // Set up event callback
     logosdelivery_set_event_callback(deliveryCtx, event_callback, this);
+
+    // Always register the RLN fetcher so root/proof polling can start immediately.
+    // Config (account + leaf index) is set later by setRlnConfig or the gifter protocol.
+    logosdelivery_set_rln_fetcher(deliveryCtx, rln_fetcher, this);
+
+    // Subscribe to RLN module root/proof broadcast events (deferred to avoid blocking createNode).
+    if (logosAPI) {
+        void* ctx = deliveryCtx;
+        auto* api = logosAPI;
+        QTimer::singleShot(5000, [ctx, api]() {
+            auto* rlnConsumer = new LogosAPIConsumer("liblogos_rln_module", "delivery_module",
+                                                      api->getTokenManager());
+            QObject* rlnReplica = rlnConsumer->requestObject("liblogos_rln_module");
+            if (rlnReplica) {
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "valid_roots",
+                    [ctx](const QString&, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_roots(ctx, utf8.constData());
+                    });
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "merkle_proof",
+                    [ctx](const QString&, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_proof(ctx, utf8.constData());
+                    });
+                qDebug() << "DeliveryModulePlugin: Subscribed to RLN module events (from createNode)";
+            }
+        });
+    }
+
     return true;
 }
 
@@ -417,6 +451,20 @@ int DeliveryModulePlugin::rln_fetcher(const char* method, const char* params,
         return 1;
     }
 
+    // If called from a non-Qt thread (e.g., gifter protocol handler via Nim thread),
+    // marshal to the plugin's thread (Qt main thread) where LogosAPIClient lives.
+    if (QThread::currentThread() != plugin->thread()) {
+        qDebug() << "rln_fetcher: marshalling to Qt thread for method" << method;
+        int result = 1;
+        bool invoked = QMetaObject::invokeMethod(plugin, [&]() {
+            qDebug() << "rln_fetcher: executing on Qt thread for method" << method;
+            result = rln_fetcher(method, params, callback, callbackData, fetcherData);
+            qDebug() << "rln_fetcher: Qt thread execution complete, result=" << result;
+        }, Qt::BlockingQueuedConnection);
+        qDebug() << "rln_fetcher: invokeMethod returned" << invoked << "result=" << result;
+        return result;
+    }
+
     auto* rlnClient = plugin->logosAPI->getClient("liblogos_rln_module");
     if (!rlnClient) {
         if (callback) callback(1, "RLN module not available", 24, callbackData);
@@ -482,7 +530,7 @@ int DeliveryModulePlugin::rln_fetcher(const char* method, const char* params,
         QString configAccountId = paramsObj["configAccountId"].toString();
         QString userHoldingAccountId = paramsObj["userHoldingAccountId"].toString();
         QString idCommitment = paramsObj["idCommitment"].toString();
-        quint64 rateLimit = static_cast<quint64>(paramsObj["rateLimit"].toDouble());
+        int rateLimit = paramsObj["rateLimit"].toInt(100);
 
         if (configAccountId.isEmpty() || userHoldingAccountId.isEmpty() || idCommitment.isEmpty()) {
             if (callback) callback(1, "Missing required params", 23, callbackData);
