@@ -5,6 +5,7 @@
 #include "delivery_module_interface.h"
 #include "logos_api.h"
 #include "logos_api_client.h"
+#include "logos_api_consumer.h"
 
 /**
  * @brief Concrete Qt plugin implementing the delivery messaging module.
@@ -171,6 +172,9 @@ public:
      */
     Q_INVOKABLE QExpected<QString> send(const QString &contentTopic, const QString &payload) override;
 
+    /// Simplified send for logoscore -c calls (returns bool instead of QExpected)
+    Q_INVOKABLE bool sendTest(const QString& contentTopic, const QString& payload);
+
     /**
      * @brief Subscribes to the supplied content topic.
      * @param contentTopic Topic identifier.
@@ -197,6 +201,14 @@ public:
      * @brief Information about the available configuration parameters to be used in `createNode`.
      */
     Q_INVOKABLE QString getAvailableConfigs() override;
+
+    Q_INVOKABLE bool setRlnConfig(const QString& configAccountId, int leafIndex) override;
+
+    /// Self-register as an RLN member via the RLN module's gifter service.
+    /// Returns JSON: {id_secret_hash, id_commitment, leaf_index} or empty on failure.
+    Q_INVOKABLE QString selfRegisterRln(const QString& configAccountId,
+                                         const QString& walletAccountId,
+                                         int rateLimit) override;
 
     QString name() const override { return "delivery_module"; }
 
@@ -254,4 +266,7 @@ private:
      * @param userData Opaque pointer expected to be `DeliveryModulePlugin*`.
      */
     static void event_callback(int callerRet, const char* msg, size_t len, void* userData);
+
+    static int rln_fetcher(const char* method, const char* params,
+        void (*callback)(int, const char*, size_t, void*), void* callbackData, void* fetcherData);
 };

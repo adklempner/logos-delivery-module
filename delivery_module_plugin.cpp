@@ -4,6 +4,10 @@
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
+#include <QTimer>
+#include <QRandomGenerator>
+#include <QThread>
 #include <semaphore>
 
 #include "api_call_handler.h"
@@ -11,6 +15,8 @@
 // liblogosdelivery provides a high-level message-delivery API
 extern "C" {
 #include <liblogosdelivery.h>
+void logosdelivery_push_roots(void* ctx, const char* rootsJson);
+void logosdelivery_push_proof(void* ctx, const char* proofJson);
 }
 
 DeliveryModulePlugin::DeliveryModulePlugin() : deliveryCtx(nullptr)
@@ -191,29 +197,44 @@ bool DeliveryModulePlugin::createNode(const QString &cfg)
     
     // Set up event callback
     logosdelivery_set_event_callback(deliveryCtx, event_callback, this);
+
+    // Always register the RLN fetcher so root/proof polling can start immediately.
+    // Config (account + leaf index) is set later by setRlnConfig or the gifter protocol.
+    // RLN module event subscription is handled by setRlnConfig (after the config is known)
+    // to avoid duplicate setup and RPC contention with subscribe().
+    logosdelivery_set_rln_fetcher(deliveryCtx, rln_fetcher, this);
+
     return true;
 }
 
 bool DeliveryModulePlugin::start()
 {
     qDebug() << "DeliveryModulePlugin::start called";
-    
+
     if (!deliveryCtx) {
         qWarning() << "DeliveryModulePlugin: Cannot start Messaging - context not initialized. Call createNode first.";
         return false;
     }
-    
-    auto outcome = callApiRetVoid(
-        "start",
-        CALLBACK_TIMEOUT,
-        bindApiCall(logosdelivery_start_node, deliveryCtx));
 
-    if (outcome.isErr()) {
-        qWarning() << "DeliveryModulePlugin: Start failed:" << outcome.error();
+    // Fire-and-forget: the FFI thread starts the Waku node asynchronously.
+    // We cannot block here because the start_node handler awaits peer connections
+    // which may take longer than logoscore's -c IPC timeout (20s).
+    auto callback = +[](int callerRet, const char* msg, size_t len, void*) {
+        if (callerRet != 0) {
+            QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "unknown error";
+            qWarning() << "DeliveryModulePlugin: Async start completed with error:" << message;
+        } else {
+            qDebug() << "DeliveryModulePlugin: Async start completed successfully";
+        }
+    };
+
+    int ret = logosdelivery_start_node(deliveryCtx, callback, nullptr);
+    if (ret != 0) {
+        qWarning() << "DeliveryModulePlugin: Failed to initiate start";
         return false;
     }
 
-    qDebug() << "DeliveryModulePlugin: Messaging start completed with success: true";
+    qDebug() << "DeliveryModulePlugin: Start initiated (async)";
     return true;
 }
 
@@ -394,3 +415,271 @@ QString DeliveryModulePlugin::getAvailableConfigs() {
 
     return outcome.value();
 }
+
+int DeliveryModulePlugin::rln_fetcher(const char* method, const char* params,
+    void (*callback)(int, const char*, size_t, void*), void* callbackData, void* fetcherData)
+{
+    auto* plugin = static_cast<DeliveryModulePlugin*>(fetcherData);
+    if (!plugin || !plugin->logosAPI) {
+        if (callback) callback(1, "LogosAPI not available", 21, callbackData);
+        return 1;
+    }
+
+    // If called from a non-Qt thread (e.g., gifter protocol handler via Nim thread),
+    // marshal to the plugin's thread (Qt main thread) where LogosAPIClient lives.
+    if (QThread::currentThread() != plugin->thread()) {
+        qDebug() << "rln_fetcher: marshalling to Qt thread for method" << method;
+        int result = 1;
+        bool invoked = QMetaObject::invokeMethod(plugin, [&]() {
+            qDebug() << "rln_fetcher: executing on Qt thread for method" << method;
+            result = rln_fetcher(method, params, callback, callbackData, fetcherData);
+            qDebug() << "rln_fetcher: Qt thread execution complete, result=" << result;
+        }, Qt::BlockingQueuedConnection);
+        qDebug() << "rln_fetcher: invokeMethod returned" << invoked << "result=" << result;
+        return result;
+    }
+
+    auto* rlnClient = plugin->logosAPI->getClient("liblogos_rln_module");
+    if (!rlnClient) {
+        if (callback) callback(1, "RLN module not available", 24, callbackData);
+        return 1;
+    }
+
+    QString methodStr(method);
+    QString paramsStr(params);
+
+    if (methodStr == "get_valid_roots") {
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "get_valid_roots", QVariant(paramsStr));
+        QByteArray utf8 = result.toString().toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
+    if (methodStr == "get_merkle_proofs") {
+        QStringList parts = paramsStr.split(",");
+        if (parts.size() < 2) {
+            if (callback) callback(1, "Expected configAccountId,leafIndex", 35, callbackData);
+            return 1;
+        }
+        QString configAccount = parts[0];
+        QString leafIndicesJson = "[" + parts[1] + "]";
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "get_merkle_proofs",
+            QVariant(configAccount), QVariant(leafIndicesJson));
+        QString proofsJson = result.toString();
+
+        QJsonArray arr = QJsonDocument::fromJson(proofsJson.toUtf8()).array();
+        if (arr.isEmpty()) {
+            if (callback) callback(1, "Empty proof array", 17, callbackData);
+            return 1;
+        }
+        QByteArray singleProof = QJsonDocument(arr[0].toObject()).toJson(QJsonDocument::Compact);
+        if (callback) callback(0, singleProof.constData(), singleProof.size(), callbackData);
+        return 0;
+    }
+
+    if (methodStr == "generate_identity") {
+        // params: wallet_account_id
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "generate_identity", QVariant(paramsStr));
+        QString resultJson = result.toString();
+        if (resultJson.isEmpty()) {
+            if (callback) callback(1, "generate_identity failed", 24, callbackData);
+            return 1;
+        }
+        QByteArray utf8 = resultJson.toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
+    if (methodStr == "register_member") {
+        // params: JSON object with configAccountId, userHoldingAccountId, idCommitment, rateLimit
+        QJsonDocument paramsDoc = QJsonDocument::fromJson(paramsStr.toUtf8());
+        if (!paramsDoc.isObject()) {
+            if (callback) callback(1, "Expected JSON object params", 27, callbackData);
+            return 1;
+        }
+        QJsonObject paramsObj = paramsDoc.object();
+        QString configAccountId = paramsObj["configAccountId"].toString();
+        QString userHoldingAccountId = paramsObj["userHoldingAccountId"].toString();
+        QString idCommitment = paramsObj["idCommitment"].toString();
+        int rateLimit = paramsObj["rateLimit"].toInt(100);
+
+        if (configAccountId.isEmpty() || userHoldingAccountId.isEmpty() || idCommitment.isEmpty()) {
+            if (callback) callback(1, "Missing required params", 23, callbackData);
+            return 1;
+        }
+
+        QVariant result = rlnClient->invokeRemoteMethod(
+            "liblogos_rln_module", "register_member",
+            QVariant(configAccountId),
+            QVariant(userHoldingAccountId),
+            QVariant(idCommitment),
+            QVariant(rateLimit));
+        QString resultJson = result.toString();
+        if (resultJson.isEmpty()) {
+            if (callback) callback(1, "register_member failed", 22, callbackData);
+            return 1;
+        }
+        QByteArray utf8 = resultJson.toUtf8();
+        if (callback) callback(0, utf8.constData(), utf8.size(), callbackData);
+        return 0;
+    }
+
+    if (callback) callback(1, "Unknown method", 14, callbackData);
+    return 1;
+}
+
+bool DeliveryModulePlugin::setRlnConfig(const QString& configAccountId, int leafIndex)
+{
+    if (!deliveryCtx) {
+        qWarning() << "DeliveryModulePlugin: Cannot set RLN config - context not initialized";
+        return false;
+    }
+
+    logosdelivery_set_rln_fetcher(deliveryCtx, rln_fetcher, this);
+    logosdelivery_set_rln_config(deliveryCtx, configAccountId.toUtf8().constData(), leafIndex);
+
+    // Event subscription is deferred to avoid blocking the -c call
+    // The RLN module broadcasts roots/proofs on a timer; we subscribe after a delay
+    if (logosAPI) {
+        void* ctx = deliveryCtx;
+        auto* api = logosAPI;
+        QTimer::singleShot(5000, [ctx, api]() {
+            auto* rlnConsumer = new LogosAPIConsumer("liblogos_rln_module", "delivery_module",
+                                                      api->getTokenManager());
+            QObject* rlnReplica = rlnConsumer->requestObject("liblogos_rln_module");
+            if (rlnReplica) {
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "valid_roots",
+                    [ctx](const QString& eventName, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_roots(ctx, utf8.constData());
+                    });
+                rlnConsumer->onEvent(rlnReplica, rlnConsumer, "merkle_proof",
+                    [ctx](const QString& eventName, const QVariantList& data) {
+                        if (data.isEmpty()) return;
+                        QByteArray utf8 = data[0].toString().toUtf8();
+                        if (!utf8.isEmpty())
+                            logosdelivery_push_proof(ctx, utf8.constData());
+                    });
+                qDebug() << "DeliveryModulePlugin: Subscribed to RLN module events";
+            } else {
+                qWarning() << "DeliveryModulePlugin: Could not get RLN module replica";
+            }
+        });
+    }
+
+    qDebug() << "DeliveryModulePlugin: RLN config set, account:" << configAccountId << "leaf:" << leafIndex;
+    return true;
+}
+
+QString DeliveryModulePlugin::selfRegisterRln(const QString& configAccountId,
+                                               const QString& walletAccountId,
+                                               int rateLimit)
+{
+    if (!logosAPI) {
+        qWarning() << "selfRegisterRln: logosAPI not initialized";
+        return {};
+    }
+
+    auto* rlnClient = logosAPI->getClient("liblogos_rln_module");
+    if (!rlnClient) {
+        qWarning() << "selfRegisterRln: RLN module not available";
+        return {};
+    }
+
+    // Step 1: Generate identity from a random seed
+    QByteArray seedBytes(32, 0);
+    for (int i = 0; i < 32; ++i)
+        seedBytes[i] = static_cast<char>(QRandomGenerator::global()->generate() & 0xFF);
+    QString seed = QString::fromLatin1(seedBytes.toHex());
+
+    qDebug() << "selfRegisterRln: generating identity with seed" << seed.left(16) << "...";
+    QVariant genResult = rlnClient->invokeRemoteMethod(
+        "liblogos_rln_module", "generate_identity", QVariant(seed));
+    QString genJson = genResult.toString();
+    if (genJson.isEmpty()) {
+        qWarning() << "selfRegisterRln: generate_identity failed";
+        return {};
+    }
+
+    QJsonDocument genDoc = QJsonDocument::fromJson(genJson.toUtf8());
+    QString idCommitment = genDoc.object()["id_commitment"].toString();
+    QString idSecretHash = genDoc.object()["id_secret_hash"].toString();
+    if (idCommitment.isEmpty() || idSecretHash.isEmpty()) {
+        qWarning() << "selfRegisterRln: failed to parse identity" << genJson;
+        return {};
+    }
+    qDebug() << "selfRegisterRln: identity generated, commitment:" << idCommitment.left(16) << "...";
+
+    // Step 2: Register membership
+    qDebug() << "selfRegisterRln: registering member...";
+    QVariant regResult = rlnClient->invokeRemoteMethod(
+        "liblogos_rln_module", "register_member",
+        QVariant(configAccountId), QVariant(walletAccountId),
+        QVariant(idCommitment), QVariant(rateLimit));
+    QString regJson = regResult.toString();
+    if (regJson.isEmpty()) {
+        qWarning() << "selfRegisterRln: register_member failed";
+        return {};
+    }
+
+    QJsonDocument regDoc = QJsonDocument::fromJson(regJson.toUtf8());
+    int leafIndex = static_cast<int>(regDoc.object()["leaf_index"].toDouble());
+    qDebug() << "selfRegisterRln: registered at leaf" << leafIndex;
+
+    // Step 3: Wire credentials via setRlnConfig
+    if (!setRlnConfig(configAccountId, leafIndex)) {
+        qWarning() << "selfRegisterRln: setRlnConfig failed";
+        return {};
+    }
+
+    // Step 4: Set identity credentials on the group manager
+    if (deliveryCtx) {
+        logosdelivery_set_rln_identity(deliveryCtx, idSecretHash.toUtf8().constData());
+    }
+
+    // Return result
+    QJsonObject result;
+    result["id_secret_hash"] = idSecretHash;
+    result["id_commitment"] = idCommitment;
+    result["leaf_index"] = leafIndex;
+    return QJsonDocument(result).toJson(QJsonDocument::Compact);
+}
+
+bool DeliveryModulePlugin::sendTest(const QString& contentTopic, const QString& payload)
+{
+    if (!deliveryCtx) {
+        qWarning() << "DeliveryModulePlugin: sendTest - context not initialized";
+        return false;
+    }
+
+    void* ctx = deliveryCtx;
+    QTimer::singleShot(5000, [ctx, contentTopic, payload]() {
+        QJsonObject messageObj;
+        messageObj["contentTopic"] = contentTopic;
+        messageObj["payload"] = QString::fromUtf8(payload.toUtf8().toBase64());
+        messageObj["ephemeral"] = false;
+
+        QJsonDocument doc(messageObj);
+        QByteArray messageJson = doc.toJson(QJsonDocument::Compact);
+
+        auto callback = +[](int callerRet, const char* msg, size_t len, void*) {
+            if (callerRet != 0) {
+                QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "unknown error";
+                qWarning() << "sendTest result: error -" << message;
+            } else {
+                QString message = (msg && len > 0) ? QString::fromUtf8(msg, len) : "";
+                qDebug() << "sendTest result: success, requestId:" << message;
+            }
+        };
+
+        qDebug() << "sendTest: sending deferred message";
+        logosdelivery_send(ctx, callback, nullptr, messageJson.constData());
+    });
+    return true;
+}
+

@@ -4,7 +4,7 @@
   inputs = {
     # Follow the same nixpkgs as logos-liblogos to ensure compatibility
     nixpkgs.follows = "logos-liblogos/nixpkgs";
-    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk?ref=feat/logos-result";
+    logos-cpp-sdk.url = "github:logos-co/logos-cpp-sdk/a4bd66c";
     logos-liblogos.url = "github:logos-co/logos-liblogos";
     logos-delivery.url = "git+https://github.com/logos-messaging/logos-delivery?submodules=1";
   };

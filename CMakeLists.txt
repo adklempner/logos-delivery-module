@@ -207,11 +207,13 @@ target_include_directories(delivery_module_plugin PRIVATE
     ${LIBLOGOSDELIVERY_DIR}
 )
 
-# Look for liblogosdelivery.h in logos-delivery
+# Look for liblogosdelivery.h in logos-delivery (nix store, source checkout, or vendor fallback)
 if(EXISTS "${LOGOS_DELIVERY_ROOT}/include/liblogosdelivery.h")
     target_include_directories(delivery_module_plugin PRIVATE ${LOGOS_DELIVERY_ROOT}/include)
 elseif(EXISTS "${LOGOS_DELIVERY_ROOT}/liblogosdelivery/liblogosdelivery.h")
     target_include_directories(delivery_module_plugin PRIVATE ${LOGOS_DELIVERY_ROOT}/liblogosdelivery)
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/logos-delivery/liblogosdelivery/liblogosdelivery.h")
+    target_include_directories(delivery_module_plugin PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/vendor/logos-delivery/liblogosdelivery)
 endif()
 
 # Add include directories based on layout type
