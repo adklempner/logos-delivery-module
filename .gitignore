@@ -40,3 +40,7 @@ qrc_*.cpp
 
 # Sim runtime artifacts
 simulations/mixnet-logos-core/.sim_state/
+simulations/mixnet-logos-core/.sim_state_lez/
+rln_tree.db
+rln_keystore_*.json
+chat2mix.log
