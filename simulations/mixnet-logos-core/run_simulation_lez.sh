@@ -183,6 +183,7 @@ for i in $(seq 0 $((NUM_NODES - 1))); do
   "kadBootstrapNodes": $KAD_BOOTSTRAP,
   "peerExchange": false,
   "rendezvous": false,
+  "ipColocationLimit": 0,
   "logLevel": "TRACE"
 }
 EOF
@@ -206,28 +207,17 @@ EOF
     echo "{\"name\":\"delivery_module\",\"version\":\"1.0.0\",\"type\":\"core\",\"main\":{\"$PLATFORM\":\"delivery_module_plugin.$EXT\"},\"dependencies\":[],\"capabilities\":[]}" > "$MDIR/delivery_module/manifest.json"
 
     log "  Starting node $i (port $TCP_PORT)..."
-    if [ "$i" -eq 0 ]; then
-        # Node 0: wallet + createNode + start + setRlnConfig + subscribe + selfRegisterRln
-        TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
-            -c "$WALLET_CALL" \
-            -c "delivery_module.createNode(@$NODE_CONFIG)" \
-            -c "delivery_module.start()" \
-            -c "delivery_module.setRlnConfig($CONFIG_ACCOUNT,0)" \
-            -c "delivery_module.subscribe($CONTENT_TOPIC)" \
-            -c "delivery_module.selfRegisterRln($CONFIG_ACCOUNT,$GIFTER_ACCOUNT,100)" \
-            </dev/null >"$LOG_FILE" 2>&1 &
-        EXPECTED_CALLS=6
-    else
-        # Nodes 1-3: wallet + createNode + start + setRlnConfig + subscribe
-        TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
-            -c "$WALLET_CALL" \
-            -c "delivery_module.createNode(@$NODE_CONFIG)" \
-            -c "delivery_module.start()" \
-            -c "delivery_module.setRlnConfig($CONFIG_ACCOUNT,0)" \
-            -c "delivery_module.subscribe($CONTENT_TOPIC)" \
-            </dev/null >"$LOG_FILE" 2>&1 &
-        EXPECTED_CALLS=5
-    fi
+    # All nodes: wallet + createNode + start + setRlnConfig + subscribe
+    # selfRegisterRln is NOT called here — registration is handled by run_setup
+    # and the nodes just poll for roots/proofs via the LEZ RLN module
+    (cd "$STATE_DIR" && TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
+        -c "$WALLET_CALL" \
+        -c "delivery_module.createNode(@$NODE_CONFIG)" \
+        -c "delivery_module.start()" \
+        -c "delivery_module.setRlnConfig($CONFIG_ACCOUNT,0)" \
+        -c "delivery_module.subscribe($CONTENT_TOPIC)" \
+        </dev/null >"$LOG_FILE" 2>&1) &
+    EXPECTED_CALLS=5
     NODE_PID=$!; INSTANCE_PIDS+=($NODE_PID)
     for t in $(seq 1 90); do
         N=$(grep -c '^Method call successful' "$LOG_FILE" 2>/dev/null || true); N=${N:-0}
@@ -243,29 +233,46 @@ done
 echo ""
 
 # ---------- Phase 5: chat2mix ----------
-echo "[5/6] Waiting 30s for mix pool, then launching chat2mix..."
-sleep 30
+echo "[5/6] Waiting 60s for mix pool (kademlia propagation)..."
+sleep 60
 
 RECEIVER_LOG="$STATE_DIR/chat2mix_receiver.log"
 SENDER_LOG="$STATE_DIR/chat2mix_sender.log"
 
-(printf 'receiver\n'; sleep 999) | "$CHAT2MIX_BIN" \
+# Generate off-chain credentials for chat2mix (needs local keystores + rln_tree.db)
+if [ ! -f "$STATE_DIR/rln_tree.db" ]; then
+    log "  Generating off-chain RLN credentials for chat2mix..."
+    (cd "$STATE_DIR" && /tmp/setup_credentials 2>&1 | tail -2) || log "  (credentials already exist)"
+fi
+
+# Build static node list so chat2mix can discover all mix peers
+STATIC_NODES=""
+for j in $(seq 0 $((NUM_NODES - 1))); do
+    P=$((BASE_TCP_PORT + j))
+    STATIC_NODES="$STATIC_NODES --staticnode=/ip4/127.0.0.1/tcp/$P/p2p/${PEER_IDS[$j]}"
+done
+
+# Run chat2mix from STATE_DIR so it can access rln_keystore_<peerId>.json + rln_tree.db
+(printf 'receiver\n'; sleep 999) | \
+    (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID --num-shards-in-network=$NUM_SHARDS --shard=0 \
     --nodekey=$CHAT_RECEIVER_NODEKEY \
     --servicenode="$BOOTSTRAP_PEER" --kad-bootstrap-node="$BOOTSTRAP_PEER" \
-    --log-level=TRACE >"$RECEIVER_LOG" 2>&1 &
+    $STATIC_NODES \
+    --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!; log "  Receiver PID: $RECEIVER_PID"
-sleep 30
+sleep 60  # Give receiver time to connect + fill mix pool
 
 (
   printf 'sender\n'
   for n in $(seq 1 $NUM_TEST_MESSAGES); do sleep 5; printf '%s_%d\n' "$TEST_MESSAGE_PREFIX" "$n"; done
   sleep 10; printf '/exit\n'
-) | "$CHAT2MIX_BIN" \
+) | (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID --num-shards-in-network=$NUM_SHARDS --shard=0 \
     --nodekey=$CHAT_SENDER_NODEKEY \
     --servicenode="$BOOTSTRAP_PEER" --kad-bootstrap-node="$BOOTSTRAP_PEER" \
-    --log-level=TRACE >"$SENDER_LOG" 2>&1 &
+    $STATIC_NODES \
+    --log-level=TRACE >"$SENDER_LOG" 2>&1) &
 SENDER_PID=$!; log "  Sender PID: $SENDER_PID"
 
 for t in $(seq 1 300); do kill -0 "$SENDER_PID" 2>/dev/null || break; sleep 1; done
