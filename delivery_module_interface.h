@@ -2,7 +2,7 @@
 
 #include <QtCore/QObject>
 #include "interface.h"
-#include "logos_types.h"
+#include "QExpected.h"
 
 class DeliveryModuleInterface : public PluginInterface
 {
@@ -11,12 +11,16 @@ public:
     Q_INVOKABLE virtual bool createNode(const QString &cfg) = 0;
     Q_INVOKABLE virtual bool start() = 0;
     Q_INVOKABLE virtual bool stop() = 0;
-    Q_INVOKABLE virtual LogosResult send(const QString &contentTopic, const QString &payload) = 0;
+    Q_INVOKABLE virtual QExpected<QString> send(const QString &contentTopic, const QString &payload) = 0;
     Q_INVOKABLE virtual bool subscribe(const QString &contentTopic) = 0;
     Q_INVOKABLE virtual bool unsubscribe(const QString &contentTopic) = 0;
     Q_INVOKABLE virtual QString getAvailableNodeInfoIDs() = 0;
     Q_INVOKABLE virtual QString getNodeInfo(const QString &nodeInfoId) = 0;
     Q_INVOKABLE virtual QString getAvailableConfigs() = 0;
+    Q_INVOKABLE virtual bool setRlnConfig(const QString& configAccountId, int leafIndex) = 0;
+    Q_INVOKABLE virtual QString selfRegisterRln(const QString& configAccountId,
+                                                 const QString& walletAccountId,
+                                                 int rateLimit) = 0;
 
 signals:
     void eventResponse(const QString& eventName, const QVariantList& data);
