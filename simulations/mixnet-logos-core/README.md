@@ -118,27 +118,58 @@ grep "ready to publish messages now" .sim_state/chat2mix_*.log
 grep "mixsimtestmsg" .sim_state/chat2mix_receiver.log
 ```
 
-## Known status (2026-04-08)
+## Status (2026-04-08)
 
-✅ All 4 logos-core nodes mount mix and successfully discover each other via
-kademlia (`found mix protocol service` is logged dozens of times across runs).
+✅ **ALL 7 CHECKS PASS** end-to-end:
 
-✅ `chat2mix` clients dial node 0 and appear in its kademlia peer list as
-`protocols=[] hasMixPubKey=false` (correct — they run with `advertiseMix=false`).
+- All 4 logos-core nodes mount mix successfully
+- Inter-node kademlia discovery populates each node's mix pool
+- chat2mix sender + receiver dial node 0, fill their local mix pools, and
+  exchange test messages via mix → relay → receiver
 
-❌ `chat2mix` waits indefinitely in
-`while node.getMixNodePoolSize() < MinMixNodePoolSize=4` and never reaches the
-publish loop. The 4 logos-core nodes ARE in node 0's DHT, but chat2mix's local
-mix pool stays at 0.
+### Bug found and fixed during initial development
 
-Hypotheses to investigate:
-1. chat2mix's `wakuKademlia.start(minMixPeers=...)` may not be running
-   `findNode` queries that would discover the other mix nodes via DHT
-2. Even if chat2mix learns of the 4 mix peers via kad, it may not be
-   registering them with `wakuMix.addMixPeer`
-3. chat2mix's chronicles output isn't showing up in the captured log file
-   (only the few `echo` lines), making it hard to see what its kad client is
-   actually doing — first concrete fix is to figure out where its log is going
+The first iteration of this sim failed because the JSON config set
+`listenAddress: "127.0.0.1"` but didn't pin the advertised addresses. With
+default `nat: "any"`, libp2p NAT discovery picked up the LAN IP (e.g.
+`192.168.x.x`) and advertised it through identify and kad-dht — even though
+the node was only **bound** to localhost. Other peers (and chat2mix) then
+tried to dial that LAN IP and got `connection refused`, never filling their
+mix pools.
+
+The fix is master mixnet's old trick: pin both ends.
+
+```json
+{
+  "listenAddress": "127.0.0.1",
+  "nat": "extip:127.0.0.1",
+  "extMultiAddrs": ["/ip4/127.0.0.1/tcp/<port>"],
+  "extMultiAddrsOnly": true
+}
+```
+
+The diagnostic that uncovered this was reading `vendor/logos-delivery/chat2mix.log`
+(chronicles writes there because chat2mix is built with
+`-d:chronicles_sinks=textlines[file]`, NOT to stdout/stderr) and seeing
+`TcpTransport dial error: (61) Connection refused` to LAN IP addresses for
+peers that should have been on `127.0.0.1`. The kad routing table on node 0
+contained both:
+- The advertised LAN IP `/ip4/192.168.x.x/tcp/6000N`
+- An "observed" address from incoming connections, with the **source TCP port**
+  of the dialing peer (e.g. `/ip4/127.0.0.1/tcp/60062`) instead of its
+  listening port
+
+Both fail the dial. The fix above eliminates the LAN-IP advertisement.
+
+### What this proves about logos-core + mix
+
+- The logos-core IPC architecture does NOT block mix from working
+- Master `WakuNodeConf` JSON parsing in `liblogosdelivery` handles `mix`,
+  `mixkey`, `enableKadDiscovery`, `kadBootstrapNodes`, `nat`, `extMultiAddrs`,
+  `extMultiAddrsOnly` etc. with zero code changes
+- chat2mix kad discovery finds mix peers via DHT routing and adds them to
+  the local mix pool correctly
+- Mix message routing through 4 hops works end-to-end
 
 ## Cleanup
 

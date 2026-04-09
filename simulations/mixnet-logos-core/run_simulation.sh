@@ -157,6 +157,12 @@ for i in $(seq 0 $((NUM_NODES - 1))); do
     KAD_BOOTSTRAP="[]"
     [ "$i" -gt 0 ] && KAD_BOOTSTRAP="[\"$BOOTSTRAP_PEER\"]"
 
+    # Critical: pin both listen + advertised addrs to 127.0.0.1.
+    # Without nat=extip:127.0.0.1 + extMultiAddrsOnly=true, libp2p NAT discovery
+    # picks up the LAN IP (192.168.x.x) and advertises it through identify/kad,
+    # even though listenAddress=127.0.0.1 means we only bind to localhost. Then
+    # other nodes try to dial that LAN IP and get connection-refused, never
+    # filling their mix pool. Master mixnet's config1.toml uses the same trick.
     cat > "$NODE_CONFIG" <<EOF
 {
   "clusterId": $CLUSTER_ID,
@@ -164,6 +170,9 @@ for i in $(seq 0 $((NUM_NODES - 1))); do
   "listenAddress": "127.0.0.1",
   "tcpPort": $TCP_PORT,
   "discv5UdpPort": $DISC_PORT,
+  "nat": "extip:127.0.0.1",
+  "extMultiAddrs": ["/ip4/127.0.0.1/tcp/$TCP_PORT"],
+  "extMultiAddrsOnly": true,
   "nodekey": "${NODEKEYS[$i]}",
   "relay": true,
   "lightpush": true,
