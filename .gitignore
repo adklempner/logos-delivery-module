@@ -37,3 +37,6 @@ qrc_*.cpp
 
 # Nix
 .pre-commit-config.yaml
+
+# Sim runtime artifacts
+simulations/mixnet-logos-core/.sim_state/
