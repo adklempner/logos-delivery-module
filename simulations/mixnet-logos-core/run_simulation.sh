@@ -63,7 +63,11 @@ esac
 STATE_DIR="$SCRIPT_DIR/.sim_state"
 FRESH=0
 for arg in "$@"; do [ "$arg" = "--fresh" ] && FRESH=1; done
-[ "$FRESH" -eq 1 ] && rm -rf "$STATE_DIR"
+if [ "$FRESH" -eq 1 ]; then
+    # Preserve RLN credentials across runs (expensive to regenerate)
+    rm -f "$STATE_DIR"/node*.log "$STATE_DIR"/node*_config.json \
+          "$STATE_DIR"/chat2mix_*.log
+fi
 mkdir -p "$STATE_DIR"
 
 INSTANCE_PIDS=()
@@ -200,11 +204,12 @@ EOF
     echo "{\"name\":\"delivery_module\",\"version\":\"1.0.0\",\"type\":\"core\",\"main\":{\"$PLATFORM\":\"delivery_module_plugin.$EXT\"},\"dependencies\":[],\"capabilities\":[]}" > "$MDIR/delivery_module/manifest.json"
 
     log "  Starting node $i (port $TCP_PORT)..."
-    TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
+    # Run from STATE_DIR so WakuMix finds rln_keystore_<peerId>.json + rln_tree.db
+    (cd "$STATE_DIR" && TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
         -c "delivery_module.createNode(@$NODE_CONFIG)" \
         -c "delivery_module.start()" \
         -c "delivery_module.subscribe($CONTENT_TOPIC)" \
-        </dev/null >"$LOG_FILE" 2>&1 &
+        </dev/null >"$LOG_FILE" 2>&1) &
     NODE_PID=$!
     INSTANCE_PIDS+=($NODE_PID)
 
@@ -237,18 +242,25 @@ echo "[4/5] Launching chat2mix receiver and sender..."
 RECEIVER_LOG="$STATE_DIR/chat2mix_receiver.log"
 SENDER_LOG="$STATE_DIR/chat2mix_sender.log"
 
+# Deterministic nodekeys for chat2mix so their peer IDs match the pre-generated RLN keystores.
+# These match the poc/mix-spam-protection branch's setup_credentials.nim NodeConfigs.
+CHAT_RECEIVER_NODEKEY="cb6fe589db0e5d5b48f7e82d33093e4d9d35456f4aaffc2322c473a173b2ac49"
+CHAT_SENDER_NODEKEY="35eace7ccb246f20c487e05015ca77273d8ecaed0ed683de3d39bf4f69336feb"
+
 # Receiver: long-running, just listens. Pipe a /nick command and then stay open.
+# Run from STATE_DIR so WakuMix finds rln_keystore_<peerId>.json + rln_tree.db
 (
   printf 'receiver\n'
   sleep 999
-) | "$CHAT2MIX_BIN" \
+) | (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID \
     --num-shards-in-network=$NUM_SHARDS \
     --shard=0 \
+    --nodekey=$CHAT_RECEIVER_NODEKEY \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
     --log-level=TRACE \
-    >"$RECEIVER_LOG" 2>&1 &
+    >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!
 log "  Receiver PID: $RECEIVER_PID"
 
@@ -264,14 +276,15 @@ sleep 30
   done
   sleep 10
   printf '/exit\n'
-) | "$CHAT2MIX_BIN" \
+) | (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID \
     --num-shards-in-network=$NUM_SHARDS \
     --shard=0 \
+    --nodekey=$CHAT_SENDER_NODEKEY \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
     --log-level=TRACE \
-    >"$SENDER_LOG" 2>&1 &
+    >"$SENDER_LOG" 2>&1) &
 SENDER_PID=$!
 log "  Sender PID:   $SENDER_PID"
 
