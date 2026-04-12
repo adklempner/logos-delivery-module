@@ -257,13 +257,15 @@ EOF
         EXPECTED_CALLS=6
     else
         # Nodes 1-3: gifter clients — auto-register via gifter protocol during createNode
+        # setRlnConfig registers the rln_fetcher C callback (needed for root/proof polling)
         (cd "$STATE_DIR" && TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
             -c "$WALLET_CALL" \
             -c "delivery_module.createNode(@$NODE_CONFIG)" \
             -c "delivery_module.start()" \
+            -c "delivery_module.setRlnConfig($CONFIG_ACCOUNT,$i)" \
             -c "delivery_module.subscribe($CONTENT_TOPIC)" \
             </dev/null >"$LOG_FILE" 2>&1) &
-        EXPECTED_CALLS=4
+        EXPECTED_CALLS=5
     fi
     NODE_PID=$!; INSTANCE_PIDS+=($NODE_PID)
     WAIT_TIMEOUT=90; [ "$i" -gt 0 ] && WAIT_TIMEOUT=300  # Gifter clients need time for on-chain registration
