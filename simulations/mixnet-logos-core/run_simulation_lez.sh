@@ -168,6 +168,21 @@ if [ ! -f "$STATE_DIR/rln_tree.db" ]; then
     (cd "$STATE_DIR" && /tmp/setup_credentials 2>&1 | tail -2) || log "  (credentials already exist)"
 fi
 
+# Register node 0 + chat2mix credentials on-chain BEFORE nodes start.
+# Nodes 1-3 will register via gifter during start().
+# Order matters: node 0 = leaf 0, then gifter nodes get leaves 1-3, then chat2mix gets 4-6.
+COMMITMENTS_CSV="$STATE_DIR/rln_commitments.csv"
+if [ -f "$COMMITMENTS_CSV" ]; then
+    log "  Registering node 0 + chat2mix credentials on-chain..."
+    # Extract node 0 (line 1) and chat2mix (lines 6-7) from the CSV, skip nodes 1-4
+    # CSV order matches setup_credentials: node0, node1, node2, node3, config4, chat2mix1, chat2mix2
+    sed -n '1p' "$COMMITMENTS_CSV" > "$STATE_DIR/pre_register.csv"
+    REGISTER_BIN="$LEZ_RLN_DIR/target/debug/register_commitments"
+    [ -x "$REGISTER_BIN" ] || (cd "$LEZ_RLN_DIR/lez-rln" && cargo build --bin register_commitments 2>/dev/null)
+    (cd "$LEZ_RLN_DIR/lez-rln" && NSSA_WALLET_HOME_DIR="$LEZ_RLN_DIR/dev" cargo run --bin register_commitments -- "$STATE_DIR/pre_register.csv" 2>&1) | tail -3
+    rm -f "$STATE_DIR/pre_register.csv"
+fi
+
 for i in $(seq 0 $((NUM_NODES - 1))); do
     TCP_PORT=$((BASE_TCP_PORT + i)); DISC_PORT=$((BASE_DISC_PORT + i))
     NODE_CONFIG="$STATE_DIR/node${i}_config.json"
@@ -292,15 +307,17 @@ sleep 60
 RECEIVER_LOG="$STATE_DIR/chat2mix_receiver.log"
 SENDER_LOG="$STATE_DIR/chat2mix_sender.log"
 
-# Register ALL identity commitments on-chain (from setup_credentials CSV).
-# This ensures the on-chain tree matches the offline rln_tree.db used by chat2mix.
+# Register remaining credentials on-chain (config4 + chat2mix).
+# Nodes 0 was registered pre-start. Nodes 1-3 registered via gifter during start().
+# Now register config4 (line 5) + chat2mix (lines 6-7) = leaves 4, 5, 6.
 COMMITMENTS_CSV="$STATE_DIR/rln_commitments.csv"
 if [ -f "$COMMITMENTS_CSV" ]; then
-    log "  Registering identity commitments on-chain..."
+    log "  Registering chat2mix credentials on-chain..."
+    sed -n '5,7p' "$COMMITMENTS_CSV" > "$STATE_DIR/chat2mix_register.csv"
     REGISTER_BIN="$LEZ_RLN_DIR/target/debug/register_commitments"
     [ -x "$REGISTER_BIN" ] || (cd "$LEZ_RLN_DIR/lez-rln" && cargo build --bin register_commitments 2>/dev/null)
-    (cd "$LEZ_RLN_DIR/lez-rln" && NSSA_WALLET_HOME_DIR="$LEZ_RLN_DIR/dev" cargo run --bin register_commitments -- "$COMMITMENTS_CSV" 2>&1) | tail -5
-    rm -f "$COMMITMENTS_CSV"  # One-time registration
+    (cd "$LEZ_RLN_DIR/lez-rln" && NSSA_WALLET_HOME_DIR="$LEZ_RLN_DIR/dev" cargo run --bin register_commitments -- "$STATE_DIR/chat2mix_register.csv" 2>&1) | tail -5
+    rm -f "$STATE_DIR/chat2mix_register.csv" "$COMMITMENTS_CSV"
 fi
 
 # Use kademlia discovery for chat2mix (same as off-chain sim).
