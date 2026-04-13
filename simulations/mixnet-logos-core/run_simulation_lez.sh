@@ -49,7 +49,7 @@ MIXKEYS=(  # Private Curve25519 mix keys (passed to logoscore nodes via "mixkey"
 NUM_NODES=4
 BASE_TCP_PORT=60001
 BASE_DISC_PORT=9001
-CLUSTER_ID=2
+CLUSTER_ID=99
 NUM_SHARDS=1
 CONTENT_TOPIC="/chat2mix/2/0/proto"
 TEST_MESSAGE_PREFIX="mixleztestmsg"
@@ -318,11 +318,12 @@ SENDER_LOG="$STATE_DIR/chat2mix_sender.log"
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
     --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!; log "  Receiver PID: $RECEIVER_PID"
-sleep 90  # Give receiver time to connect + fill mix pool via kademlia
+sleep 120  # Give receiver time to connect + fill mix pool via kademlia
 
 # Sender: send NUM_TEST_MESSAGES messages then exit
 (
   printf 'sender\n'
+  sleep 30  # Wait for mix node discovery before sending
   for n in $(seq 1 $NUM_TEST_MESSAGES); do
     sleep 5
     printf '%s_%d\n' "$TEST_MESSAGE_PREFIX" "$n"
