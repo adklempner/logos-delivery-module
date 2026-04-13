@@ -330,6 +330,7 @@ fi
     (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID --num-shards-in-network=$NUM_SHARDS --shard=0 \
     --nodekey=$CHAT_RECEIVER_NODEKEY \
+    --tcp-port=60010 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
     --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
@@ -349,6 +350,7 @@ sleep 120  # Give receiver time to connect + fill mix pool via kademlia
 ) | (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
     --cluster-id=$CLUSTER_ID --num-shards-in-network=$NUM_SHARDS --shard=0 \
     --nodekey=$CHAT_SENDER_NODEKEY \
+    --tcp-port=60011 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
     --log-level=TRACE >"$SENDER_LOG" 2>&1) &
