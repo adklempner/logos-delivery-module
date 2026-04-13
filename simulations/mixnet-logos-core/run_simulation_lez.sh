@@ -256,16 +256,16 @@ EOF
             </dev/null >"$LOG_FILE" 2>&1) &
         EXPECTED_CALLS=6
     else
-        # Nodes 1-3: gifter clients — auto-register via gifter protocol during createNode
-        # setRlnConfig registers the rln_fetcher C callback (needed for root/proof polling)
+        # Nodes 1-3: register via selfRegisterRln (uses RLN module directly, avoids libp2p gifter crash)
         (cd "$STATE_DIR" && TMPDIR=/tmp "$LOGOSCORE" -m "$MDIR" -l "$LOAD_ORDER" \
             -c "$WALLET_CALL" \
             -c "delivery_module.createNode(@$NODE_CONFIG)" \
             -c "delivery_module.start()" \
             -c "delivery_module.setRlnConfig($CONFIG_ACCOUNT,$i)" \
+            -c "delivery_module.selfRegisterRln($CONFIG_ACCOUNT,$GIFTER_ACCOUNT,100)" \
             -c "delivery_module.subscribe($CONTENT_TOPIC)" \
             </dev/null >"$LOG_FILE" 2>&1) &
-        EXPECTED_CALLS=5
+        EXPECTED_CALLS=6
     fi
     NODE_PID=$!; INSTANCE_PIDS+=($NODE_PID)
     WAIT_TIMEOUT=90; [ "$i" -gt 0 ] && WAIT_TIMEOUT=300  # Gifter clients need time for on-chain registration
@@ -354,12 +354,12 @@ echo ""
 echo "  --- RLN gifter ---"
 GIFTER_MOUNTED=$(grep -c "RLN gifter service mounted" "$STATE_DIR/node0.log" 2>/dev/null || true)
 check "[ ${GIFTER_MOUNTED:-0} -ge 1 ]" "Node 0 gifter service mounted ($GIFTER_MOUNTED)"
-GIFTER_REGS=0
-for i in 1 2 3; do
-    R=$(grep -c "Registered via RLN gifter" "$STATE_DIR/node${i}.log" 2>/dev/null || true)
-    GIFTER_REGS=$((GIFTER_REGS + R))
+RLN_REGS=0
+for i in 0 1 2 3; do
+    R=$(grep -c "selfRegisterRln\|Registered via RLN gifter" "$STATE_DIR/node${i}.log" 2>/dev/null || true)
+    RLN_REGS=$((RLN_REGS + R))
 done
-check "[ $GIFTER_REGS -ge 1 ]" "Nodes 1-3 registered via gifter ($GIFTER_REGS)"
+check "[ $RLN_REGS -ge 4 ]" "Nodes registered RLN membership ($RLN_REGS)"
 echo ""
 echo "  --- LEZ RLN ---"
 LEZ_ROOTS=0

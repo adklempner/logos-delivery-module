@@ -1,0 +1,17 @@
+# ninja log v7
+1	93	1776038613095017895	CMakeFiles/run_cpp_generator_messaging	e6d628a7c9b9ca7
+1	93	1776038613095017895	/Users/arseniy/Waku/Logos/rln-zkvm/logos-delivery-module/build_plugin/CMakeFiles/run_cpp_generator_messaging	e6d628a7c9b9ca7
+93	181	1776038613259143242	simple_example_autogen/timestamp	134744db1dc8603b
+93	181	1776038613259143242	simple_example_autogen/mocs_compilation.cpp	134744db1dc8603b
+93	181	1776038613259143242	/Users/arseniy/Waku/Logos/rln-zkvm/logos-delivery-module/build_plugin/simple_example_autogen/timestamp	134744db1dc8603b
+93	181	1776038613259143242	/Users/arseniy/Waku/Logos/rln-zkvm/logos-delivery-module/build_plugin/simple_example_autogen/mocs_compilation.cpp	134744db1dc8603b
+181	225	1776038613274798630	CMakeFiles/simple_example.dir/simple_example_autogen/mocs_compilation.cpp.o	7992f44a87604a67
+93	886	1776038613957466602	delivery_module_plugin_autogen/timestamp	1d2eb7b12f3bdf15
+93	886	1776038613957466602	delivery_module_plugin_autogen/mocs_compilation.cpp	1d2eb7b12f3bdf15
+93	886	1776038613957466602	/Users/arseniy/Waku/Logos/rln-zkvm/logos-delivery-module/build_plugin/delivery_module_plugin_autogen/timestamp	1d2eb7b12f3bdf15
+93	886	1776038613957466602	/Users/arseniy/Waku/Logos/rln-zkvm/logos-delivery-module/build_plugin/delivery_module_plugin_autogen/mocs_compilation.cpp	1d2eb7b12f3bdf15
+181	1649	1776038613275064893	CMakeFiles/simple_example.dir/examples/simple.cpp.o	99dc9d2326a1d4b2
+1650	1733	1776038614743474226	modules/simple_example	68f63793b817a9a3
+887	2156	1776038613980948861	CMakeFiles/delivery_module_plugin.dir/delivery_module_plugin_autogen/mocs_compilation.cpp.o	21812ad7c1b98626
+888	3117	1776038613981282752	CMakeFiles/delivery_module_plugin.dir/delivery_module_plugin.cpp.o	74084f01f44a1517
+3117	3636	1776038616210762219	modules/delivery_module_plugin.dylib	2c451e592fc6b509
