@@ -325,6 +325,12 @@ fi
 # putValue during KadDHT.start() → bootstrap(). Chat2mix's random walk finds them.
 # NOTE: --mixnode flags cause a crash in chat2mix's lightpush+mixify flow.
 
+# Build static node list for chat2mix (direct connection to all mix nodes)
+STATIC_FLAGS=""
+for j in $(seq 0 $((NUM_NODES - 1))); do
+    STATIC_FLAGS="$STATIC_FLAGS --staticnode=/ip4/127.0.0.1/tcp/$((BASE_TCP_PORT + j))/p2p/${PEER_IDS[$j]}"
+done
+
 # Run chat2mix from STATE_DIR so it can access rln_keystore_<peerId>.json + rln_tree.db
 (printf 'receiver\n'; sleep 999) | \
     (cd "$STATE_DIR" && "$CHAT2MIX_BIN" \
@@ -333,9 +339,10 @@ fi
     --tcp-port=60010 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
+    $STATIC_FLAGS \
     --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!; log "  Receiver PID: $RECEIVER_PID"
-sleep 120  # Give receiver time to connect + fill mix pool via kademlia
+sleep 90  # Give receiver time to connect + fill mix pool
 
 # Sender: send NUM_TEST_MESSAGES messages then exit
 (
@@ -353,6 +360,7 @@ sleep 120  # Give receiver time to connect + fill mix pool via kademlia
     --tcp-port=60011 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
+    $STATIC_FLAGS \
     --log-level=TRACE >"$SENDER_LOG" 2>&1) &
 SENDER_PID=$!; log "  Sender PID: $SENDER_PID"
 
