@@ -325,10 +325,19 @@ fi
 # putValue during KadDHT.start() → bootstrap(). Chat2mix's random walk finds them.
 # NOTE: --mixnode flags cause a crash in chat2mix's lightpush+mixify flow.
 
-# Build static node list for chat2mix (direct connection to all mix nodes)
-STATIC_FLAGS=""
+# Mix public keys (Curve25519) corresponding to MIXKEYS private keys.
+# These are deterministic — derived from the private keys above.
+MIX_PUBKEYS=(
+    "9231e86da6432502900a84f867004ce78632ab52cd8e30b1ec322cd795710c2a"
+    "275cd6889e1f29ca48e5b9edb800d1a94f49f13d393a0ecf1a07af753506de6c"
+    "e0ed594a8d506681be075e8e23723478388fb182477f7a469309a25e7076fc18"
+    "8fd7a1a7c19b403d231452a9b1ea40eb1cc76f455d918ef8980e7685f9eeeb1f"
+)
+
+# Build --mixnode flags for chat2mix (provides mix public keys for node pool)
+MIXNODE_FLAGS=""
 for j in $(seq 0 $((NUM_NODES - 1))); do
-    STATIC_FLAGS="$STATIC_FLAGS --staticnode=/ip4/127.0.0.1/tcp/$((BASE_TCP_PORT + j))/p2p/${PEER_IDS[$j]}"
+    MIXNODE_FLAGS="$MIXNODE_FLAGS --mixnode=/ip4/127.0.0.1/tcp/$((BASE_TCP_PORT + j))/p2p/${PEER_IDS[$j]}:${MIX_PUBKEYS[$j]}"
 done
 
 # Run chat2mix from STATE_DIR so it can access rln_keystore_<peerId>.json + rln_tree.db
@@ -339,7 +348,7 @@ done
     --tcp-port=60010 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
-    $STATIC_FLAGS \
+    $MIXNODE_FLAGS \
     --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!; log "  Receiver PID: $RECEIVER_PID"
 sleep 90  # Give receiver time to connect + fill mix pool
@@ -360,7 +369,7 @@ sleep 90  # Give receiver time to connect + fill mix pool
     --tcp-port=60011 \
     --servicenode="$BOOTSTRAP_PEER" \
     --kad-bootstrap-node="$BOOTSTRAP_PEER" \
-    $STATIC_FLAGS \
+    $MIXNODE_FLAGS \
     --log-level=TRACE >"$SENDER_LOG" 2>&1) &
 SENDER_PID=$!; log "  Sender PID: $SENDER_PID"
 
