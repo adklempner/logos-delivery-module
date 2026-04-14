@@ -638,8 +638,10 @@ QString DeliveryModulePlugin::selfRegisterRln(const QString& configAccountId,
     }
 
     // Step 4: Set identity credentials on the group manager
+    // Pass the seed (not idSecretHash) so the Nim side can regenerate the full
+    // credential (idTrapdoor, idNullifier, idSecretHash, idCommitment) via membershipKeyGen(seed).
     if (deliveryCtx) {
-        logosdelivery_set_rln_identity(deliveryCtx, idSecretHash.toUtf8().constData());
+        logosdelivery_set_rln_identity(deliveryCtx, seed.toUtf8().constData());
     }
 
     // Return result
