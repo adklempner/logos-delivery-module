@@ -37,3 +37,11 @@ qrc_*.cpp
 
 # Nix
 .pre-commit-config.yaml
+
+# Sim runtime artifacts
+simulations/mixnet-logos-core/.sim_state/
+simulations/mixnet-logos-core/.sim_state_lez/
+rln_tree.db
+rln_keystore_*.json
+chat2mix.log
+build_plugin/
