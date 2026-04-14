@@ -189,16 +189,13 @@ for i in $(seq 0 $((NUM_NODES - 1))); do
     LOG_FILE="$STATE_DIR/node${i}.log"
     KAD_BOOTSTRAP="[]"; [ "$i" -gt 0 ] && KAD_BOOTSTRAP="[\"$BOOTSTRAP_PEER\"]"
     # Build static peer list: connect to all OTHER nodes for gossipsub mesh formation
-    STATIC_PEERS="[]"
-    if [ "$i" -gt 0 ]; then
-        PEER_LIST=""
-        for j in $(seq 0 $((NUM_NODES - 1))); do
-            [ "$j" -eq "$i" ] && continue
-            [ -n "$PEER_LIST" ] && PEER_LIST="$PEER_LIST,"
-            PEER_LIST="$PEER_LIST\"/ip4/127.0.0.1/tcp/$((BASE_TCP_PORT + j))/p2p/${PEER_IDS[$j]}\""
-        done
-        STATIC_PEERS="[$PEER_LIST]"
-    fi
+    PEER_LIST=""
+    for j in $(seq 0 $((NUM_NODES - 1))); do
+        [ "$j" -eq "$i" ] && continue
+        [ -n "$PEER_LIST" ] && PEER_LIST="$PEER_LIST,"
+        PEER_LIST="$PEER_LIST\"/ip4/127.0.0.1/tcp/$((BASE_TCP_PORT + j))/p2p/${PEER_IDS[$j]}\""
+    done
+    STATIC_PEERS="[$PEER_LIST]"
 
     # Gifter config: node 0 is gifter service, nodes 1-3 are gifter clients
     GIFTER_FIELDS=""
@@ -351,12 +348,12 @@ done
     $MIXNODE_FLAGS \
     --log-level=TRACE >"$RECEIVER_LOG" 2>&1) &
 RECEIVER_PID=$!; log "  Receiver PID: $RECEIVER_PID"
-sleep 90  # Give receiver time to connect + fill mix pool
+sleep 150  # Give receiver time to connect, fill mix pool, and form gossipsub mesh
 
 # Sender: send NUM_TEST_MESSAGES messages then exit
 (
   printf 'sender\n'
-  sleep 30  # Wait for mix node discovery before sending
+  sleep 60  # Wait for mix node discovery + gossipsub mesh formation before sending
   for n in $(seq 1 $NUM_TEST_MESSAGES); do
     sleep 5
     printf '%s_%d\n' "$TEST_MESSAGE_PREFIX" "$n"
