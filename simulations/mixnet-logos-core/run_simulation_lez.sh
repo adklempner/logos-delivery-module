@@ -114,9 +114,8 @@ else
     # the wire format diverges (e.g. CLOCK_50 system account at PR #403).
     LSSA_REV=$(grep -oE 'rev\s*=\s*"[0-9a-f]+"' "$LEZ_RLN_DIR/lez-rln/Cargo.toml" | head -1 | sed 's/.*"\([0-9a-f]*\)"/\1/')
     [ -z "$LSSA_REV" ] && die "Could not extract lssa rev from lez-rln/Cargo.toml"
-    CURRENT_REV=$(git -C "$LEZ_RLN_DIR/lssa" rev-parse HEAD | cut -c1-${#LSSA_REV})
-    if [ "$CURRENT_REV" != "$LSSA_REV" ]; then
-        log "  Pinning lssa to $LSSA_REV (was $CURRENT_REV)..."
+    if ! git -C "$LEZ_RLN_DIR/lssa" merge-base --is-ancestor "$LSSA_REV" HEAD 2>/dev/null; then
+        log "  Pinning lssa to $LSSA_REV..."
         (cd "$LEZ_RLN_DIR/lssa" && git fetch --quiet origin && git checkout --quiet "$LSSA_REV") \
             || die "lssa checkout $LSSA_REV failed"
     fi
