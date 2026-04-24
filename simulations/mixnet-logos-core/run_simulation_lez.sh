@@ -107,7 +107,20 @@ if nc -z 127.0.0.1 3040 2>/dev/null && [ "$FRESH" -eq 0 ]; then
     echo "  Already running (PID $SEQUENCER_PID)"
 else
     [ "$(nc -z 127.0.0.1 3040 2>/dev/null; echo $?)" = "0" ] && kill "$(lsof -ti tcp:3040 2>/dev/null)" 2>/dev/null || true; sleep 1
-    rm -rf "$LEZ_RLN_DIR/lssa/rocksdb"
+    rm -rf "$LEZ_RLN_DIR/lssa/rocksdb" "$LEZ_RLN_DIR/lssa/sequencer/service/bedrock_signing_key"
+
+    # Sequencer guest binaries must match the lssa rev that lez-rln's host-side
+    # client pins. Mismatch surfaces as token-tx DeserializeUnexpectedEnd once
+    # the wire format diverges (e.g. CLOCK_50 system account at PR #403).
+    LSSA_REV=$(grep -oE 'rev\s*=\s*"[0-9a-f]+"' "$LEZ_RLN_DIR/lez-rln/Cargo.toml" | head -1 | sed 's/.*"\([0-9a-f]*\)"/\1/')
+    [ -z "$LSSA_REV" ] && die "Could not extract lssa rev from lez-rln/Cargo.toml"
+    CURRENT_REV=$(git -C "$LEZ_RLN_DIR/lssa" rev-parse HEAD | cut -c1-${#LSSA_REV})
+    if [ "$CURRENT_REV" != "$LSSA_REV" ]; then
+        log "  Pinning lssa to $LSSA_REV (was $CURRENT_REV)..."
+        (cd "$LEZ_RLN_DIR/lssa" && git fetch --quiet origin && git checkout --quiet "$LSSA_REV") \
+            || die "lssa checkout $LSSA_REV failed"
+    fi
+
     log "  Building sequencer..."
     if (cd "$LEZ_RLN_DIR/lssa" && cargo build --features standalone -p sequencer_service 2>&1 | tail -3); then
         SEQ_BIN="./target/debug/sequencer_service"; SEQ_CFG="sequencer/service/configs/debug/sequencer_config.json"
