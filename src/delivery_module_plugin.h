@@ -6,8 +6,12 @@
 #include <string>
 #include <vector>
 
+#include <QObject>
+
 #include <logos_module_context.h>
 #include <logos_result.h>
+
+class LogosAPI;
 
 /**
  * @brief Pure C++ implementation of the delivery messaging module.
@@ -165,6 +169,47 @@ public:
      */
     StdLogosResult getAvailableConfigs();
 
+    /**
+     * @brief Bridges the Nim delivery library to @c liblogos_rln_module.
+     *
+     * Installs @ref rln_fetcher on the delivery ctx, sets the RLN account /
+     * leaf index, and subscribes (with a 5s delay) to the @c valid_roots and
+     * @c merkle_proof events from @c liblogos_rln_module, forwarding them
+     * into the Nim delivery ctx via @c logosdelivery_push_roots /
+     * @c logosdelivery_push_proof.
+     *
+     * @return success when wired; error when ctx is not initialised.
+     */
+    StdLogosResult setRlnConfig(const std::string& configAccountId, int64_t leafIndex);
+
+    /**
+     * @brief Generates an RLN identity and registers it on-chain in-process.
+     *
+     * Calls @c generate_identity then @c register_member on
+     * @c liblogos_rln_module (via QtRO), wires the resulting leaf index
+     * through @ref setRlnConfig, and installs the seed on the delivery ctx
+     * via @c logosdelivery_set_rln_identity.
+     *
+     * Returns @c {id_secret_hash, id_commitment, leaf_index} as JSON value on
+     * success; error on failure.
+     */
+    StdLogosResult selfRegisterRln(const std::string& configAccountId, const std::string& walletAccountId, int64_t rateLimit);
+
+    /// JSON-blob variant of @ref selfRegisterRln — accepts a single string arg
+    /// of the form `{"config":"<base58>","wallet":"<base58>","rate":<int>}` and
+    /// delegates to the typed overload. Worked around `logoscore-cli`'s `call`
+    /// subcommand auto-coercing any digit-leading positional arg to an int
+    /// (mangles base58 account IDs like "38nxK..." → int 38). The JSON form
+    /// starts with `{`, dodging coercion; same pattern createNode already uses.
+    StdLogosResult selfRegisterRlnJson(const std::string& argsJson);
+
+    /// Wires the LogosAPI handle used by RLN operations.
+    ///
+    /// The handle is encoded as a hex string because the universal codegen
+    /// doesn't recognise opaque pointer types directly. The host must pass
+    /// @c QString::number(reinterpret_cast<quintptr>(api), 16).
+    StdLogosResult initLogos(const std::string& apiHandleHex);
+
     std::string name() const { return "delivery_module"; }
 
     std::string version() const;
@@ -176,10 +221,21 @@ logos_events:
     void messageReceived(const std::string& messageHash, const std::string& contentTopic, const std::vector<uint8_t>& payload, int64_t timestamp);
     void connectionStateChanged(const std::string& connectionStatus, int64_t timestamp);
 
+    /// QObject anchor used as the receiver for Qt::QueuedConnection
+    /// dispatches inside @ref rln_fetcher. When this impl is destroyed the
+    /// anchor is destroyed too, so any pending QMetaObject::invokeMethod
+    /// targeting it is dropped by Qt — preventing use-after-free of a
+    /// captured `this` pointer if a callback fires shortly before teardown.
+    QObject* emitRouter() { return &m_emitRouter; }
+
 private:
     void* deliveryCtx;
+    LogosAPI* logosAPI = nullptr;
 
     std::mutex createNodeMutex;
+
+    /// See @ref emitRouter().
+    QObject m_emitRouter;
 
     static constexpr std::chrono::seconds CALLBACK_TIMEOUT{30};
 
@@ -191,4 +247,13 @@ private:
      * @param userData Opaque pointer expected to be `DeliveryModuleImpl*`.
      */
     static void event_callback(int callerRet, const char* msg, size_t len, void* userData);
+
+    /// FFI trampoline registered via @c logosdelivery_set_rln_fetcher. Called
+    /// from Nim chronos worker threads; dispatches onto the Qt thread via
+    /// QueuedConnection and blocks the caller on a @c std::promise until the
+    /// async RPC completes. See delivery_module_plugin.cpp for the threading
+    /// contract.
+    static int rln_fetcher(const char* method, const char* params,
+                           void (*callback)(int, const char*, size_t, void*),
+                           void* callbackData, void* fetcherData);
 };
