@@ -71,15 +71,11 @@ DeliveryModuleImpl::~DeliveryModuleImpl()
     }
 }
 
-void DeliveryModuleImpl::onContextReady()
-{
-    // `modules()` is populated by the codegen-emitted provider once the
-    // framework's LogosProviderBase::init has run. modules().api is the raw
-    // LogosAPI handle the bespoke rln_fetcher + selfRegisterRln need.
-    logosAPI = modules().api;
-    fprintf(stderr, "DeliveryModuleImpl::onContextReady: logosAPI=%p\n",
-            static_cast<void*>(logosAPI));
-}
+// onContextReady is intentionally NOT overridden — we use lazy access via
+// modules().api at call sites (gated on isContextReady()) instead, because
+// calling modules() inside the override segfaulted (the codegen-emitted
+// provider's onInit doesn't reliably set m_logosModulesPtr BEFORE
+// _logosCoreSetContext_ fires onContextReady for empty-deps modules).
 
 void DeliveryModuleImpl::event_callback(int callerRet, const char* msg, size_t len, void* userData)
 {
@@ -514,9 +510,16 @@ int DeliveryModuleImpl::rln_fetcher(const char* method, const char* params,
     void (*callback)(int, const char*, size_t, void*), void* callbackData, void* fetcherData)
 {
     auto* impl = static_cast<DeliveryModuleImpl*>(fetcherData);
-    if (!impl || !impl->logosAPI) {
+    if (!impl || !impl->isContextReady()) {
         if (callback) callback(1, "LogosAPI not available", 21, callbackData);
         return 1;
+    }
+    // Lazy-fetch from the codegen-emitted LogosModules aggregate. The local
+    // `logosAPI` field was set by the legacy initLogos(hex) hook which the
+    // universal-codegen provider doesn't auto-invoke; modules().api is the
+    // canonical access path for codegen modules.
+    if (!impl->logosAPI) {
+        impl->logosAPI = impl->modules().api;
     }
 
     const std::string m = method ? method : "";
@@ -651,6 +654,12 @@ StdLogosResult DeliveryModuleImpl::selfRegisterRln(const std::string& configAcco
                                                     const std::string& walletAccountIdStd,
                                                     int64_t rateLimit)
 {
+    if (!isContextReady()) {
+        return {false, {}, "module context not ready"};
+    }
+    if (!logosAPI) {
+        logosAPI = modules().api;  // lazy wire, see rln_fetcher for rationale
+    }
     if (!logosAPI) {
         return {false, {}, "logosAPI not initialized"};
     }

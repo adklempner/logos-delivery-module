@@ -220,17 +220,6 @@ logos_events:
     /// captured `this` pointer if a callback fires shortly before teardown.
     QObject* emitRouter() { return &m_emitRouter; }
 
-protected:
-    /// Hook fired by the universal-codegen provider once `modules()` is wired
-    /// (LogosAPI handle + per-dep client wrappers populated). Copies the raw
-    /// `LogosAPI*` into our own `logosAPI` field so the bespoke
-    /// rln_fetcher trampoline + selfRegisterRln keep working. Replaces the
-    /// legacy `initLogos(string apiHandleHex)` hack — the framework's
-    /// QtProviderObject::init only auto-calls `initLogos(LogosAPI*)` on the
-    /// wrapped QObject's metaobject, which the universal codegen doesn't
-    /// expose, so the hex-string variant was never invoked.
-    void onContextReady() override;
-
 private:
     void* deliveryCtx;
     LogosAPI* logosAPI = nullptr;
