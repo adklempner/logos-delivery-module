@@ -1,4 +1,5 @@
 #include "delivery_module_plugin.h"
+#include "logos_sdk.h"
 #include <cstdio>
 #include <ctime>
 #include <future>
@@ -68,6 +69,16 @@ DeliveryModuleImpl::~DeliveryModuleImpl()
         logosdelivery_destroy(deliveryCtx, nullptr, nullptr);
         deliveryCtx = nullptr;
     }
+}
+
+void DeliveryModuleImpl::onContextReady()
+{
+    // `modules()` is populated by the codegen-emitted provider once the
+    // framework's LogosProviderBase::init has run. modules().api is the raw
+    // LogosAPI handle the bespoke rln_fetcher + selfRegisterRln need.
+    logosAPI = modules().api;
+    fprintf(stderr, "DeliveryModuleImpl::onContextReady: logosAPI=%p\n",
+            static_cast<void*>(logosAPI));
 }
 
 void DeliveryModuleImpl::event_callback(int callerRet, const char* msg, size_t len, void* userData)
