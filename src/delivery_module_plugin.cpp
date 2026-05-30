@@ -731,6 +731,26 @@ StdLogosResult DeliveryModuleImpl::selfRegisterRln(const std::string& configAcco
     return {true, out};
 }
 
+StdLogosResult DeliveryModuleImpl::selfRegisterRlnJson(const std::string& argsJson) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(argsJson);
+    } catch (const std::exception& e) {
+        return {false, {}, std::string("selfRegisterRlnJson: invalid JSON: ") + e.what()};
+    }
+    if (!j.is_object()) {
+        return {false, {}, "selfRegisterRlnJson: payload must be an object"};
+    }
+    if (!j.contains("config") || !j["config"].is_string()
+            || !j.contains("wallet") || !j["wallet"].is_string()
+            || !j.contains("rate") || !j["rate"].is_number_integer()) {
+        return {false, {}, "selfRegisterRlnJson: payload requires {config:str, wallet:str, rate:int}"};
+    }
+    return selfRegisterRln(j["config"].get<std::string>(),
+                           j["wallet"].get<std::string>(),
+                           j["rate"].get<int64_t>());
+}
+
 StdLogosResult DeliveryModuleImpl::getAvailableConfigs() {
     fprintf(stderr, "DeliveryModuleImpl::getAvailableConfigs called\n");
 

@@ -195,6 +195,14 @@ public:
      */
     StdLogosResult selfRegisterRln(const std::string& configAccountId, const std::string& walletAccountId, int64_t rateLimit);
 
+    /// JSON-blob variant of @ref selfRegisterRln — accepts a single string arg
+    /// of the form `{"config":"<base58>","wallet":"<base58>","rate":<int>}` and
+    /// delegates to the typed overload. Worked around `logoscore-cli`'s `call`
+    /// subcommand auto-coercing any digit-leading positional arg to an int
+    /// (mangles base58 account IDs like "38nxK..." → int 38). The JSON form
+    /// starts with `{`, dodging coercion; same pattern createNode already uses.
+    StdLogosResult selfRegisterRlnJson(const std::string& argsJson);
+
     /// Wires the LogosAPI handle used by RLN operations.
     ///
     /// The handle is encoded as a hex string because the universal codegen
