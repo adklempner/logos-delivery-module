@@ -10,7 +10,7 @@
     "codegen": {
         "impl_header": "delivery_module_plugin.h"
     },
-    "dependencies": ["liblogos_rln_module"],
+    "dependencies": [],
     "include": [
         "liblogosdelivery.so",
         "liblogosdelivery.dylib",
