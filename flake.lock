@@ -518,11 +518,11 @@
         "zerokitMix": "zerokitMix"
       },
       "locked": {
-        "lastModified": 1779998026,
-        "narHash": "sha256-6zhbZtAoq9HX7OpKjfo3EqD61zQE5c/q/tAOkx+by3U=",
+        "lastModified": 1780099662,
+        "narHash": "sha256-WUraSvdE07jcYCiUr2jp9Sk4l4mv+NdXPDVA+jMYdmI=",
         "ref": "refs/heads/feat/sim-rln-gifter-auth-debug",
-        "rev": "90ab4d974b35a9272c8584ee19b2b0c91083270c",
-        "revCount": 2276,
+        "rev": "83be6e4b57aff138847be666f5cd15e63ee64b79",
+        "revCount": 2278,
         "submodules": true,
         "type": "git",
         "url": "file:///Users/arseniy/Waku/Logos/logos-chat/vendor/logos-lez-rln/logos-delivery"
