@@ -698,11 +698,21 @@ StdLogosResult DeliveryModuleImpl::selfRegisterRln(const std::string& configAcco
     // wait for confirmation); callers needing to know when the tx lands should
     // poll is_member_registered. The chat/delivery side picks up the confirmed
     // state via valid_roots / get_merkle_proofs once the tree advances.
+    //
+    // 180s timeout — mirrors the async rln_fetcher path at line 580. On
+    // testnet, register_member's internal pre-check + wallet tx submission
+    // takes 5-30s+ (longer when wallet RPCs queue). The default 20s leaves
+    // selfRegisterRln returning "register_member failed" silently, causing
+    // the gifter coroutine to wait forever on setRlnConfig, which surfaces
+    // downstream as "RLN config not set on gifter node" errors on every
+    // inbound chat-client registration.
     qDebug() << "selfRegisterRln: registering member...";
     QVariant regResult = rlnClient->invokeRemoteMethod(
-        "liblogos_rln_module", "register_member",
-        QVariant(configAccountId), QVariant(walletAccountId),
-        QVariant(idCommitment), QVariant(static_cast<qlonglong>(rateLimit)));
+        QStringLiteral("liblogos_rln_module"), QStringLiteral("register_member"),
+        QVariantList{QVariant(configAccountId), QVariant(walletAccountId),
+                     QVariant(idCommitment),
+                     QVariant(static_cast<qlonglong>(rateLimit))},
+        Timeout(180000));
     QString regJson = regResult.toString();
     if (regJson.isEmpty()) {
         return {false, {}, "register_member failed"};
