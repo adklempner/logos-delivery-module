@@ -515,22 +515,22 @@
       "inputs": {
         "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "zerokit": "zerokit"
+        "zerokit": "zerokit",
+        "zerokitMix": "zerokitMix"
       },
       "locked": {
-        "lastModified": 1780924346,
-        "narHash": "sha256-FCrhlLLwygkZqyO1vYs6Yw88FKGrNU9b8J610UrFRPM=",
-        "ref": "refs/heads/master",
-        "rev": "faa674131124f93fc55573c247c8b60d84e2d71b",
-        "revCount": 2354,
+        "lastModified": 1781226333,
+        "narHash": "sha256-v0RdaEZauzYFonZJL/AhHy3czu+BCbP3g+sUlLrOmOA=",
+        "rev": "d7ccffc17b670b656fb22ba56dc26a2949768070",
+        "revCount": 2361,
         "submodules": true,
         "type": "git",
-        "url": "https://github.com/logos-messaging/logos-delivery"
+        "url": "file:///Users/arseniy/Waku/Logos/logos-chat/vendor/logos-lez-rln/logos-delivery"
       },
       "original": {
         "submodules": true,
         "type": "git",
-        "url": "https://github.com/logos-messaging/logos-delivery"
+        "url": "file:///Users/arseniy/Waku/Logos/logos-chat/vendor/logos-lez-rln/logos-delivery"
       }
     },
     "logos-design-system": {
@@ -7963,6 +7963,28 @@
         "type": "github"
       }
     },
+    "rust-overlay_3": {
+      "inputs": {
+        "nixpkgs": [
+          "logos-delivery",
+          "zerokitMix",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1771297684,
+        "narHash": "sha256-wieWskQxZLPlNXX06JEB0bMoS/ZYQ89xBzF0RL9lyLs=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "755d3669699a7c62aef35af187d75dc2728cfd85",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
     "zerokit": {
       "inputs": {
         "nixpkgs": [
@@ -7984,6 +8006,29 @@
         "repo": "zerokit",
         "rev": "5e64cb8822bee65eed6cf459f95ae72b80c6ba63",
         "type": "github"
+      }
+    },
+    "zerokitMix": {
+      "inputs": {
+        "nixpkgs": [
+          "logos-delivery",
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_3"
+      },
+      "locked": {
+        "lastModified": 1773917887,
+        "narHash": "sha256-5a2cL26uw7NdLCD0gCA3tS7uX8W9yxRGqcPhWNevstM=",
+        "ref": "refs/tags/v2.0.0",
+        "rev": "0ef1364c86c9c2c441284389c46b0b461feab893",
+        "revCount": 371,
+        "type": "git",
+        "url": "https://github.com/vacp2p/zerokit"
+      },
+      "original": {
+        "ref": "refs/tags/v2.0.0",
+        "type": "git",
+        "url": "https://github.com/vacp2p/zerokit"
       }
     }
   },
