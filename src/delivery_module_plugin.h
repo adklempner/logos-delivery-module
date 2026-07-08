@@ -237,7 +237,7 @@ private:
     /// See @ref emitRouter().
     QObject m_emitRouter;
 
-    static constexpr std::chrono::seconds CALLBACK_TIMEOUT{30};
+    static constexpr std::chrono::seconds CALLBACK_TIMEOUT{180};
 
     /**
      * @brief Global C callback used by liblogosdelivery to report async events.

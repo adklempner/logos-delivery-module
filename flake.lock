@@ -519,10 +519,10 @@
         "zerokitMix": "zerokitMix"
       },
       "locked": {
-        "lastModified": 1781226333,
-        "narHash": "sha256-v0RdaEZauzYFonZJL/AhHy3czu+BCbP3g+sUlLrOmOA=",
-        "rev": "d7ccffc17b670b656fb22ba56dc26a2949768070",
-        "revCount": 2361,
+        "lastModified": 1783528412,
+        "narHash": "sha256-NtbMYF4EjlH64B99ovyb6iC7FjHPQym8ihUmtZzKaSA=",
+        "rev": "7c2b9f102114980631407d0bb810a574905b34cc",
+        "revCount": 2409,
         "submodules": true,
         "type": "git",
         "url": "file:///Users/arseniy/Waku/Logos/logos-chat/vendor/logos-lez-rln/logos-delivery"
