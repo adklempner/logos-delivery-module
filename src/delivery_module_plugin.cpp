@@ -180,6 +180,16 @@ static std::optional<std::string> applyPortDefaults(const std::string& cfg)
         return std::nullopt;
     }
 
+    // Config-v3 shape ({mode, preset, messagingOverrides, kernelOverrides})
+    // rejects unknown top-level keys, so the port defaults must live inside
+    // kernelOverrides there. Legacy flat configs keep the top-level defaults.
+    const bool isV3 = cfgObj.contains("mode") || cfgObj.contains("preset")
+        || cfgObj.contains("messagingOverrides") || cfgObj.contains("kernelOverrides");
+    nlohmann::json& portTarget = isV3 ? cfgObj["kernelOverrides"] : cfgObj;
+    if (isV3 && !portTarget.is_object()) {
+        portTarget = nlohmann::json::object();
+    }
+
     for (const char* portKey : {
              "tcpPort",
              "discv5UdpPort",
@@ -187,8 +197,8 @@ static std::optional<std::string> applyPortDefaults(const std::string& cfg)
              "metricsServerPort",
              "websocketPort",
          }) {
-        if (!cfgObj.contains(portKey)) {
-            cfgObj[portKey] = 0;
+        if (!portTarget.contains(portKey)) {
+            portTarget[portKey] = 0;
         }
     }
 
