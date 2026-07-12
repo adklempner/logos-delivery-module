@@ -23,4 +23,5 @@ logos_module(
         logosdelivery
     INCLUDE_DIRS
         lib
+        src
 )
