@@ -100,6 +100,7 @@ The delivery module provides the following API methods (all synchronous, all ret
 - `getNodeInfo(nodeInfoId: QString)` - Retrieve node info by identifier
 - `getAvailableConfigs()` - Retrieve available configuration parameter descriptions
 - `collectOpenMetricsText()` - Node metrics as OpenMetrics/Prometheus text for the `openmetrics` module (see [docs/run-node.md → Metrics](docs/run-node.md#metrics))
+- `rlnRespond(reqId: int, resultJson: QString)` - Complete an RLN request previously emitted via the `rlnRequest` event (see [docs/rln.md](docs/rln.md))
 
 ### Node Configuration (`createNode`)
 
@@ -200,6 +201,13 @@ carries a `QVariantList data` with positional values:
 - **`connectionStateChanged`** – node connectivity change
   - `data[0]` (`QString`): connection status
   - `data[1]` (`QString`): local timestamp (ISO-8601)
+- **`rlnRequest`** – the delivery library requests an RLN operation from the
+  external RLN module; answer via `rlnRespond` (see [docs/rln.md](docs/rln.md))
+  - `data[0]` (`int64`): request id
+  - `data[1]` (`QString`): operation name (`start`, `stop`, `register_membership`,
+    `get_membership_state`, `get_epoch_quota`, `generate_proof`, `verify_proof`)
+  - `data[2]` (`QString`): payload JSON (opaque, RLN module's wire schema)
+  - `data[3]` (`QString`): local timestamp
 
 ### Metrics
 
