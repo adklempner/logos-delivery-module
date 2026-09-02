@@ -121,7 +121,7 @@ const char* RlnBridge::opName(Op op)
     return "?";
 }
 
-RlnBridge::RlnBridge(LiblogosRlnModule* typed) : m_typed(typed) {}
+RlnBridge::RlnBridge() = default;
 
 RlnBridge::~RlnBridge()
 {
@@ -144,8 +144,9 @@ RlnBridge::~RlnBridge()
     }
 }
 
-void RlnBridge::init()
+void RlnBridge::init(LiblogosRlnModule* typed)
 {
+    m_typed = typed;
     if (m_client) {
         return;
     }
@@ -161,9 +162,6 @@ void RlnBridge::init()
 
 std::string RlnBridge::enable()
 {
-    if (!m_typed) {
-        return "rln bridge has no typed client";
-    }
     std::lock_guard<std::mutex> lock(m_lock);
     if (!m_lanesRunning) {
         RLN_TRACE("enable: spawning slow + fast worker threads");
@@ -451,6 +449,13 @@ std::string RlnBridge::serveOp(const Job& job)
 
 std::string RlnBridge::serveFast(const Job& job)
 {
+    // Null until init() runs (no framework context — unit tests, or a host
+    // that never fired onContextReady): answer in the op's own dialect
+    // instead of dereferencing.
+    if (!m_typed) {
+        return transportFail(job.op, "transient", "rln_bridge_transport",
+            "typed client not initialized");
+    }
     const std::string ts = std::to_string(job.timestamp); // module wants a STRING
 
     RLN_TRACE("SERVE-FAST op=%s -> typed client (protocol default 20s timeout)",

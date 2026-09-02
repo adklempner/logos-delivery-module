@@ -34,14 +34,19 @@ class LiblogosRlnModule; // generated from metadata.json#dependencies
 
 class RlnBridge {
 public:
-    // `typed` is borrowed from modules().liblogos_rln_module, which outlives
-    // this object.
-    explicit RlnBridge(LiblogosRlnModule* typed);
+    RlnBridge();
     ~RlnBridge();
     RlnBridge(const RlnBridge&) = delete;
     RlnBridge& operator=(const RlnBridge&) = delete;
 
-    void init();
+    // Creates the lp client and takes the typed client for the fast lane.
+    // MUST run on the module context thread, from onContextReady: that thread
+    // becomes the lp owner, and modules() is only populated by the generated
+    // provider's onInit — it is still null while the impl is constructed
+    // (logos_module_context.h, "Do NOT do work in the constructor"). `typed`
+    // is borrowed from modules().liblogos_rln_module, which outlives this
+    // object; a null one leaves the fast lane answering transport failures.
+    void init(LiblogosRlnModule* typed);
 
     // Enable answering of RLN requests in-process
     // Returns an error string or empty on success
@@ -110,5 +115,5 @@ private:
     std::atomic<bool> m_enabled{false};
 
     lp_client* m_client = nullptr; // created in init() (context thread)
-    LiblogosRlnModule* m_typed;
+    LiblogosRlnModule* m_typed = nullptr; // borrowed, set by init()
 };

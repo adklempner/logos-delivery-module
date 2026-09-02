@@ -284,17 +284,11 @@ void DeliveryModuleImpl::rln_validate_proof_callback(uint64_t reqId, const char*
 }
 
 DeliveryModuleImpl::DeliveryModuleImpl()
-    : rlnBridge(std::make_unique<RlnBridge>(&modules().liblogos_rln_module)) //rlnBridge constructed with pointer to client which communicates with the RLN Module (which needs to be co-loaded in logoscore)
+    : rlnBridge(std::make_unique<RlnBridge>())
     , deliveryCtx(nullptr)
     , deliveryCtxHandle(nullptr)
 {
     fprintf(stderr, "DeliveryModuleImpl: Initializing...\n");
-}
-
-void DeliveryModuleImpl::onContextReady()
-{
-    // Owner-thread requirement — see rln_bridge.h's threading note.
-    rlnBridge->init();
 }
 
 StdLogosResult DeliveryModuleImpl::rlnBridgeEnable()
@@ -305,6 +299,15 @@ StdLogosResult DeliveryModuleImpl::rlnBridgeEnable()
     }
     fprintf(stderr, "DeliveryModuleImpl: rln bridge enabled (in-process responder)\n");
     return {true, {}};
+}
+
+void DeliveryModuleImpl::onContextReady()
+{
+    // Not the constructor: the generated provider's onInit sets the modules()
+    // pointer and only then fires this hook, so modules() is null until here.
+    // This is also the module context thread, which the bridge's lp client
+    // needs as its owner — see rln_bridge.h's threading note.
+    rlnBridge->init(&modules().liblogos_rln_module);
 }
 
 DeliveryModuleImpl::~DeliveryModuleImpl()

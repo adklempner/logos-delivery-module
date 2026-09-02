@@ -359,7 +359,10 @@ protected:
     void onContextReady() override;
 
 private:
-    // In-process RLN responder (src/rln_bridge.h). 
+    // In-process RLN responder (src/rln_bridge.h). Constructed here, init()ed
+    // in onContextReady (module context thread, where modules() is live);
+    // serves only once enabled — by @ref rlnBridgeEnable, or by the node
+    // config's "rln-relay-lez" in createNode.
     std::unique_ptr<RlnBridge> rlnBridge;
 
     // Raw FFI context: what every call and the event registry take.
