@@ -121,7 +121,7 @@ Build the `logoscore` CLI (the headless runtime) and the `lgpm` package
 manager from their flakes, then build and install this module's `.lgx`.
 `liblogos_rln_module` is an optional dependency, so a node whose preset has
 RLN off needs nothing else; an RLN-enabled one also needs
-`liblogos_rln_module`, `liblogos_lez_rln_module` and `lez_core`. This flake
+`liblogos_rln_module` and `liblogos_lez_rln_module`. This flake
 re-exports their `.lgx`s from its own locked inputs, so they match the revs
 the module was built against:
 
@@ -139,12 +139,11 @@ nix build '.#lgx' -o delivery-lgx
 # Its RLN dependency chain
 nix build '.#liblogos_rln_module-lgx' -o rln-lgx
 nix build '.#liblogos_lez_rln_module-lgx' -o lez-rln-lgx
-nix build '.#lez_core-lgx' -o lez-core-lgx
 
 # Seed the modules dir with the bundled capability module, then install
 mkdir -p modules
 cp -RL ./logos/modules/. ./modules/
-for pkg in lez-core-lgx lez-rln-lgx rln-lgx delivery-lgx; do
+for pkg in lez-rln-lgx rln-lgx delivery-lgx; do
   ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file "$pkg"/*.lgx
 done
 ```

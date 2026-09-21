@@ -21,8 +21,8 @@
     # The RLN API module. The input name is load-bearing and cannot be chosen
     # freely: logos-module-builder resolves each metadata.json#optional_dependencies
     # entry as the flake input of the SAME name and generates bindings from
-    # its published <name>.lidl. Pinned to feat/lip-alignment (wire 0.7.x).
-    liblogos_rln_module.url = "git+https://github.com/logos-co/logos-rln-modules?ref=feat/lip-alignment&dir=logos-rln-module";
+    # its published <name>.lidl.
+    liblogos_rln_module.url = "git+https://github.com/logos-co/logos-rln-modules?ref=main&rev=65697028baffc072e1aeebaec7c7e35e7e12cab1&dir=logos-rln-module";
   };
 
   outputs = inputs@{ logos-module-builder, ... }:
@@ -161,13 +161,11 @@
       # inputs, for a node whose preset enables RLN.
       rlnModule = inputs.liblogos_rln_module;
       lezRlnModule = rlnModule.inputs.liblogos_lez_rln_module;
-      lezCore = lezRlnModule.inputs.lez_core;
     in
     module // {
       packages = builtins.mapAttrs (system: pkgs: pkgs // {
         "liblogos_rln_module-lgx" = rlnModule.packages.${system}.lgx;
         "liblogos_lez_rln_module-lgx" = lezRlnModule.packages.${system}.lgx;
-        "lez_core-lgx" = lezCore.packages.${system}.lgx;
       }) module.packages;
     };
 }

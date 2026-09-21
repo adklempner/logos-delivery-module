@@ -112,22 +112,21 @@ sections:
           `liblogos_rln_module` is an optional dependency of `delivery_module`:
           a node whose preset has RLN off loads without it. A node on an
           RLN-enabled preset needs the whole chain installed alongside it —
-          `liblogos_rln_module` → `liblogos_lez_rln_module` → `lez_core` — so
+          `liblogos_rln_module` → `liblogos_lez_rln_module` — so
           this walkthrough installs it too.
 
           Each is built at the rev this module's `flake.lock` pins for it, so
           the RLN modules you install are the ones the delivery module was
-          built against. From a clone, this flake re-exports the same three
+          built against. From a clone, this flake re-exports the same two
           packages — `nix build '.#liblogos_rln_module-lgx'`, and likewise for
-          `liblogos_lez_rln_module` and `lez_core` — which reads the pins
+          `liblogos_lez_rln_module` — which reads the pins
           straight out of the lock.
         run: |
-          nix build 'git+https://github.com/logos-co/logos-rln-modules?ref=feat/lip-alignment&rev=53d31e3d71595c481e0e1be2ebc8120d8eaf9447&dir=logos-rln-module#lgx' -o rln-lgx
-          nix build 'git+https://github.com/logos-co/logos-rln-modules?ref=feat/lip-alignment&rev=c89c7691d06af32c002426f3c6f6dece79dbffaa&dir=logos-lez-rln-module#lgx' -o lez-rln-lgx
-          nix build 'github:logos-blockchain/logos-execution-zone-module/0ea57f8a1c57539d6ee0961a9cd27b064685b9e8#lgx' -o lez-core-lgx
-        post_text: "Three more `.lgx` packages, one per module in the chain:"
+          nix build 'git+https://github.com/logos-co/logos-rln-modules?ref=main&rev=65697028baffc072e1aeebaec7c7e35e7e12cab1&dir=logos-rln-module#lgx' -o rln-lgx
+          nix build 'git+https://github.com/logos-co/logos-rln-modules?ref=main&rev=9583801fae795b6d5fd5bfe8d4f407d14d859b9f&dir=logos-lez-rln-module#lgx' -o lez-rln-lgx
+        post_text: "Two more `.lgx` packages, one per module in the chain:"
         extra_run:
-          run: "ls rln-lgx/*.lgx lez-rln-lgx/*.lgx lez-core-lgx/*.lgx"
+          run: "ls rln-lgx/*.lgx lez-rln-lgx/*.lgx"
 
       - title: "Seed the modules directory with the bundled capability module"
         text: |
@@ -145,7 +144,6 @@ sections:
           `core` modules, so they go to `--modules-dir`. The packages are
           unsigned (local dev builds), so we pass `--allow-unsigned`.
         run: |
-          ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file lez-core-lgx/*.lgx
           ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file lez-rln-lgx/*.lgx
           ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file rln-lgx/*.lgx
           ./lgpm/bin/lgpm --modules-dir ./modules --allow-unsigned install --file delivery-lgx/*.lgx
