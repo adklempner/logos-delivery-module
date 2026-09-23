@@ -3,7 +3,6 @@
 
 #include <cstdio>
 #include <memory>
-#include <semaphore>
 
 #include <nlohmann/json.hpp>
 
@@ -22,35 +21,6 @@ constexpr const char* kOrigin = "delivery_module";
 // completion is dropped by logosdelivery_rln_response (non-zero return).
 constexpr int kReadMs = 70'000;
 
-// Queue discipline (stopgap until the ABI carries deadlines): a full lane
-// sheds new work immediately, and a dequeued job past its library budget is
-// answered without serving. The margin sheds a job whose remaining budget
-// could not cover a serve anyway.
-constexpr size_t kFastQueueCap = 64;
-constexpr size_t kSlowQueueCap = 8;
-constexpr int kExpiryMarginMs = 500;
-
-// One in-flight raw lp call: the trampoline fills the box and releases the
-// semaphore from the lp client's owner thread. shared_ptr keeps the box alive
-// for a reply that lands after the wait already timed out.
-struct ReplyBox {
-    std::binary_semaphore sem{0};
-    bool ok = false;
-    std::string json;
-};
-
-void replyTrampoline(int ok, const char* jsonText, void* userData)
-{
-    std::unique_ptr<std::shared_ptr<ReplyBox>> boxPtr(
-        static_cast<std::shared_ptr<ReplyBox>*>(userData));
-    auto& box = **boxPtr;
-    box.ok = ok != 0;
-    if (jsonText) {
-        box.json = jsonText;
-    }
-    box.sem.release();
-}
-
 // The module's result envelope, rebuilt from the typed client's decode in the
 // same (alphabetical) key order the protocol layer serializes.
 std::string resultEnvelope(const StdLogosResult& r)
@@ -67,18 +37,10 @@ RlnBridge::RlnBridge() = default;
 
 RlnBridge::~RlnBridge()
 {
-    {
-        std::lock_guard<std::mutex> lock(m_lock);
-        m_stopping = true;
-    }
-    m_slow.cv.notify_all();
-    m_fast.cv.notify_all();
-    if (m_slow.worker.joinable()) {
-        m_slow.worker.join();
-    }
-    if (m_fast.worker.joinable()) {
-        m_fast.worker.join();
-    }
+    // lp_client_destroy waits for a reply callback that is mid-flight to
+    // finish, then guarantees no further callback fires. A call still in
+    // flight loses its callback and leaks its small Pending — bounded, once,
+    // at shutdown.
     if (m_client) {
         lp_client_destroy(m_client);
     }
@@ -102,19 +64,17 @@ std::string RlnBridge::enable()
     if (!m_typed) {
         return "rln bridge has no typed client";
     }
-    std::lock_guard<std::mutex> lock(m_lock);
-    if (!m_lanesRunning) {
-        m_slow.worker = std::thread(&RlnBridge::laneLoop, this, &m_slow);
-        m_fast.worker = std::thread(&RlnBridge::laneLoop, this, &m_fast);
-        m_lanesRunning = true;
+    if (!m_client) {
+        return "rln bridge has no lp client";
     }
+    // No contact with the RLN module here: at enable() time (createNode) the
+    // registry connection is not up yet, so acquiring the remote object would
+    // fail. First contact is deferred to the first real call, by which point
+    // the registry is connected. Those calls arrive on a library thread, so
+    // the acquire is handed off to the lp owner thread rather than blocking
+    // the caller.
     m_enabled.store(true, std::memory_order_release);
     return {};
-}
-
-bool RlnBridge::isSlowOp(Op op)
-{
-    return op == Op::GetState || op == Op::Generate;
 }
 
 bool RlnBridge::isTstrOp(Op op)
@@ -168,275 +128,154 @@ std::string RlnBridge::transportFail(Op op, const std::string& cls,
     return json{{"success", false}, {"error", errorObj.dump()}}.dump();
 }
 
-void RlnBridge::enqueue(Job job)
+std::string RlnBridge::reshapeReply(Op op, bool ok, const char* jsonText)
 {
-    Lane& lane = isSlowOp(job.op) ? m_slow : m_fast;
-    job.enqueuedAt = std::chrono::steady_clock::now();
-    // start/stop are rare lifecycle ops and always accepted.
-    const bool lifecycleOp = job.op == Op::Start || job.op == Op::Stop;
-    const size_t cap = isSlowOp(job.op) ? kSlowQueueCap : kFastQueueCap;
-    bool shed = false;
-    size_t depth = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_lock);
-        depth = lane.queue.size();
-        shed = !lifecycleOp && depth >= cap;
-        if (!shed) {
-            lane.queue.push_back(std::move(job));
+    const std::string body = jsonText ? jsonText : "";
+    if (!ok) {
+        // lp reports failure via the flag; its error json carries
+        // {"code","message","origin"}.
+        json err = json::parse(body, nullptr, /*allow_exceptions=*/false);
+        const std::string msg =
+            err.is_object() && err.contains("message") && err["message"].is_string()
+                ? err["message"].get<std::string>()
+                : body;
+        return transportFail(op, "transient", "rln_bridge_transport",
+                             std::string(opName(op)) + ": " + msg);
+    }
+    // A tstr method's lp result is a JSON string holding the module's compact
+    // reply — forward the CONTENT (the library's parsers tolerate one leftover
+    // string layer either way).
+    json parsed = json::parse(body, nullptr, /*allow_exceptions=*/false);
+    std::string content = body;
+    if (parsed.is_string()) {
+        content = parsed.get<std::string>();
+        parsed = json::parse(content, nullptr, /*allow_exceptions=*/false);
+    }
+    // A dispatch rejection arrives as success=false with NO error text, while
+    // every genuine module failure carries a message. Treat the empty refusal
+    // as a retryable transport failure, not as the module's answer.
+    if (parsed.is_object() && parsed.value("success", true) == false) {
+        const auto err = parsed.value("error", json());
+        if (err.is_null() || (err.is_string() && err.get<std::string>().empty())) {
+            return transportFail(op, "transient", "rln_bridge_transport",
+                std::string(opName(op)) + ": dispatch rejected (refusal with no message)");
         }
     }
-    if (shed) {
-        // Immediate failure instead of letting the library's clock expire in
-        // queue. Responding from the callback thread is safe: the library
-        // fires callbacks outside its lock.
-        const std::string out = transportFail(job.op, "transient",
-            "rln_bridge_overloaded",
-            std::string(opName(job.op)) + ": shed at enqueue, " +
-                (isSlowOp(job.op) ? "slow" : "fast") + " lane full at depth " +
-                std::to_string(depth));
-        (void)logosdelivery_rln_response(job.reqId, out.c_str());
+    return content; // the module's reply, verbatim
+}
+
+void RlnBridge::onLpReply(int ok, const char* jsonText, void* userData)
+{
+    std::unique_ptr<Pending> call(static_cast<Pending*>(userData));
+    if (!call) {
         return;
     }
-    lane.cv.notify_one();
+    const std::string out = reshapeReply(call->op, ok != 0, jsonText);
+    // Non-zero: the library already timed out this reqId — nothing to do.
+    (void)logosdelivery_rln_response(call->reqId, out.c_str());
+}
+
+void RlnBridge::sendAsync(Op op, uint64_t reqId, const std::string& method,
+                          const std::string& argsJson, int timeoutMs)
+{
+    if (!m_client) {
+        const std::string out = transportFail(op, "transient", "rln_bridge_transport",
+            method + ": lp client not initialized");
+        (void)logosdelivery_rln_response(reqId, out.c_str());
+        return;
+    }
+    auto* call = new Pending{reqId, op};
+    const int rc = lp_invoke_async(m_client, method.c_str(), argsJson.c_str(),
+                                   timeoutMs, &onLpReply, call);
+    if (rc != LP_OK) {
+        delete call; // callback will never fire
+        const std::string out = transportFail(op, "transient", "rln_bridge_transport",
+            method + ": lp_invoke_async rc=" + std::to_string(rc));
+        (void)logosdelivery_rln_response(reqId, out.c_str());
+    }
 }
 
 // --- op entry points ---------------------------------------------------------
 
-std::string RlnBridge::runLifecycle(Op op, std::string configJson)
+std::string RlnBridge::lifecycleResult(Op op, const StdLogosResult& r,
+                                       const logos::CallError& err)
 {
-    if (!m_enabled.load(std::memory_order_acquire)) {
-        return "rln bridge is not enabled";
+    // Transport failure (lp error, protocol timeout, module not loaded): the
+    // decoded result is meaningless — branch on CallError only.
+    if (!err.ok()) {
+        return transportFail(op, "transient", "rln_bridge_transport",
+            std::string(opName(op)) + ": " + err.code + ": " + err.message);
     }
-    // lp calls marshal onto this thread; queueing and waiting here deadlocks.
-    Job j;
-    j.op = op;
-    j.configJson = std::move(configJson);
-
-    const std::string out = serveFast(j);
-    // The module's own reply is a LogosResult envelope; a false success is the
-    // caller's failure to report. Parsing it here is the one place this bridge
-    // looks inside a reply, because nothing downstream will.
-    json parsed = json::parse(out, nullptr, /*allow_exceptions=*/false);
-    if (parsed.is_object() && parsed.value("success", false)) {
+    // A dispatch rejection arrives as success=false with NO error text, while
+    // every genuine module failure carries a message. Treat the empty refusal
+    // as a retryable transport failure, not as the module's answer.
+    if (!r.success && r.error.empty()) {
+        return transportFail(op, "transient", "rln_bridge_transport",
+            std::string(opName(op)) + ": dispatch rejected (refusal with no message)");
+    }
+    // This bridge reports lifecycle success as empty text; anything else is the
+    // module's error envelope.
+    if (r.success) {
         return {};
     }
-    return out;
+    return resultEnvelope(r);
 }
 
 std::string RlnBridge::startBackend(std::string configJson)
 {
-    return runLifecycle(Op::Start, std::move(configJson));
+    if (!m_enabled.load(std::memory_order_acquire)) {
+        return "rln bridge is not enabled";
+    }
+    logos::CallError err;
+    const StdLogosResult r = m_typed->start(configJson, &err);
+    return lifecycleResult(Op::Start, r, err);
 }
 
 std::string RlnBridge::stopBackend()
 {
-    return runLifecycle(Op::Stop, {});
+    if (!m_enabled.load(std::memory_order_acquire)) {
+        return "rln bridge is not enabled";
+    }
+    logos::CallError err;
+    const StdLogosResult r = m_typed->stop(&err);
+    return lifecycleResult(Op::Stop, r, err);
 }
 
 void RlnBridge::getMembershipState(uint64_t reqId, std::string registryId,
                                    std::string rlnIdentifier)
 {
-    Job j;
-    j.reqId = reqId;
-    j.op = Op::GetState;
-    j.registryId = std::move(registryId);
-    j.rlnIdentifier = std::move(rlnIdentifier);
-    enqueue(std::move(j));
+    const json args = json::array({registryId, rlnIdentifier});
+    sendAsync(Op::GetState, reqId, "get_membership_state", args.dump(), kReadMs);
 }
 
 void RlnBridge::getEpochQuota(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, uint64_t timestamp)
 {
-    Job j;
-    j.reqId = reqId;
-    j.op = Op::GetQuota;
-    j.registryId = std::move(registryId);
-    j.rlnIdentifier = std::move(rlnIdentifier);
-    j.timestamp = timestamp;
-    enqueue(std::move(j));
+    // module wants the timestamp as a STRING
+    const json args = json::array({registryId, rlnIdentifier,
+                                   std::to_string(timestamp)});
+    sendAsync(Op::GetQuota, reqId, "get_epoch_quota", args.dump(),
+              budgetMsFor(Op::GetQuota));
 }
 
 void RlnBridge::generateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp)
 {
-    Job j;
-    j.reqId = reqId;
-    j.op = Op::Generate;
-    j.registryId = std::move(registryId);
-    j.rlnIdentifier = std::move(rlnIdentifier);
-    j.signalHex = std::move(signalHex);
-    j.timestamp = timestamp;
-    enqueue(std::move(j));
+    // module wants the timestamp as a STRING
+    const json args = json::array({registryId, rlnIdentifier, signalHex,
+                                   std::to_string(timestamp)});
+    sendAsync(Op::Generate, reqId, "generate_proof", args.dump(), kReadMs);
 }
 
 void RlnBridge::validateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp, std::string proofJson)
 {
-    Job j;
-    j.reqId = reqId;
-    j.op = Op::Validate;
-    j.registryId = std::move(registryId);
-    j.rlnIdentifier = std::move(rlnIdentifier);
-    j.signalHex = std::move(signalHex);
-    j.timestamp = timestamp;
-    j.proofJson = std::move(proofJson);
-    enqueue(std::move(j));
+    // module wants the timestamp as a STRING
+    const json args = json::array({registryId, rlnIdentifier, signalHex,
+                                   std::to_string(timestamp), proofJson});
+    sendAsync(Op::Validate, reqId, "validate_proof", args.dump(),
+              budgetMsFor(Op::Validate));
 }
 
-// --- serving -----------------------------------------------------------------
-
-void RlnBridge::laneLoop(Lane* lane)
-{
-    for (;;) {
-        Job job;
-        {
-            std::unique_lock<std::mutex> lock(m_lock);
-            lane->cv.wait(lock, [&] { return m_stopping || !lane->queue.empty(); });
-            if (m_stopping) {
-                return;
-            }
-            job = std::move(lane->queue.front());
-            lane->queue.pop_front();
-        }
-        const auto waitedMs =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - job.enqueuedAt)
-                .count();
-        std::string out;
-        if (waitedMs + kExpiryMarginMs > budgetMsFor(job.op)) {
-            // The library's clock ran out while the job sat in queue: serving
-            // now would be wasted work ahead of jobs still awaited.
-            out = transportFail(job.op, "transient", "rln_bridge_expired",
-                std::string(opName(job.op)) + ": expired in queue after " +
-                    std::to_string(waitedMs) + "ms of a " +
-                    std::to_string(budgetMsFor(job.op)) + "ms budget");
-        } else {
-            try {
-                out = serveOp(job);
-            } catch (const std::exception& e) {
-                out = transportFail(job.op, "permanent", "bridge_exception",
-                    std::string("rln bridge exception: ") + e.what());
-            }
-        }
-        // Non-zero: the library already timed out this reqId — nothing to do.
-        (void)logosdelivery_rln_response(job.reqId, out.c_str());
-    }
-}
-
-bool RlnBridge::invokeRaw(const std::string& method, const std::string& argsJson,
-                          int timeoutMs, std::string& out, std::string& errMsg)
-{
-    if (!m_client) {
-        errMsg = method + ": lp client not initialized";
-        return false;
-    }
-    auto box = std::make_shared<ReplyBox>();
-    auto* handoff = new std::shared_ptr<ReplyBox>(box);
-    const int rc = lp_invoke_async(m_client, method.c_str(), argsJson.c_str(),
-                                   timeoutMs, &replyTrampoline, handoff);
-    if (rc != LP_OK) {
-        delete handoff; // callback will never fire
-        errMsg = method + ": lp_invoke_async rc=" + std::to_string(rc);
-        return false;
-    }
-    // The protocol enforces timeoutMs; the margin only guards a callback that
-    // never fires.
-    const auto wait = std::chrono::milliseconds(timeoutMs) + std::chrono::seconds(10);
-    if (!box->sem.try_acquire_for(wait)) {
-        errMsg = method + ": no lp completion within " + std::to_string(timeoutMs) +
-            "ms (+10s)";
-        return false;
-    }
-    if (!box->ok) {
-        json err = json::parse(box->json, nullptr, /*allow_exceptions=*/false);
-        errMsg = method + ": " +
-            (err.is_object() && err.contains("message") && err["message"].is_string()
-                    ? err["message"].get<std::string>()
-                    : box->json);
-        return false;
-    }
-    // A tstr method's lp result is a JSON string holding the module's compact
-    // reply — forward the CONTENT (the library's parsers tolerate one leftover
-    // string layer either way).
-    json parsed = json::parse(box->json, nullptr, /*allow_exceptions=*/false);
-    out = parsed.is_string() ? parsed.get<std::string>() : box->json;
-    return true;
-}
-
-std::string RlnBridge::serveOp(const Job& job)
-{
-    if (!isSlowOp(job.op)) {
-        return serveFast(job);
-    }
-    const std::string ts = std::to_string(job.timestamp); // module wants a STRING
-
-    std::string method;
-    json args = json::array();
-    int timeoutMs = kReadMs;
-    switch (job.op) {
-    case Op::GetState:
-        method = "get_membership_state";
-        args = json::array({job.registryId, job.rlnIdentifier});
-        break;
-    case Op::Generate:
-        method = "generate_proof";
-        args = json::array({job.registryId, job.rlnIdentifier, job.signalHex, ts});
-        break;
-    default:
-        break; // fast ops returned above
-    }
-
-    std::string out;
-    std::string errMsg;
-    if (!invokeRaw(method, args.dump(), timeoutMs, out, errMsg)) {
-        return transportFail(job.op, "transient", "rln_bridge_transport", errMsg);
-    }
-    return out; // the module's reply, verbatim
-}
-
-std::string RlnBridge::serveFast(const Job& job)
-{
-    const std::string ts = std::to_string(job.timestamp); // module wants a STRING
-
-    logos::CallError err;
-    StdLogosResult r;
-    const char* method = "";
-    switch (job.op) {
-    case Op::Start:
-        method = "start";
-        r = m_typed->start(job.configJson, &err);
-        break;
-    case Op::Stop:
-        method = "stop";
-        r = m_typed->stop(&err);
-        break;
-    case Op::GetQuota:
-        method = "get_epoch_quota";
-        r = m_typed->get_epoch_quota(job.registryId, job.rlnIdentifier, ts, &err);
-        break;
-    case Op::Validate:
-        method = "validate_proof";
-        r = m_typed->validate_proof(job.registryId, job.rlnIdentifier, job.signalHex,
-                                    ts, job.proofJson, &err);
-        break;
-    default:
-        return transportFail(job.op, "permanent", "bridge_exception",
-            "slow op routed to the typed fast path");
-    }
-    // Transport failure (lp error, protocol timeout, module not loaded): the
-    // decoded result is meaningless — branch on CallError only.
-    if (!err.ok()) {
-        return transportFail(job.op, "transient", "rln_bridge_transport",
-            std::string(method) + ": " + err.code + ": " + err.message);
-    }
-    // A dispatch rejection arrives as success=false with NO error text, while
-    // every genuine module failure carries a message. Treat the empty refusal
-    // as a retryable transport failure, not as the module's answer.
-    if (!r.success && r.error.empty()) {
-        return transportFail(job.op, "transient", "rln_bridge_transport",
-            std::string(method) + ": dispatch rejected (refusal with no message)");
-    }
-    return resultEnvelope(r);
-}
