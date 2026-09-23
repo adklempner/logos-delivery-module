@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
@@ -50,9 +51,11 @@ std::vector<uint8_t> base64Decode(const std::string& encoded) {
 }
 
 int64_t currentTimestampNs() {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + static_cast<int64_t>(ts.tv_nsec);
+    // std::chrono, not clock_gettime(CLOCK_REALTIME): mingw declares neither,
+    // and system_clock is the portable spelling of the same reading.
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
 }
 
 std::string toStringOrEmpty(const char* s) {
@@ -1062,6 +1065,9 @@ std::string DeliveryModuleImpl::installRlnPlugin(const DeliveryRlnConfig& cfg)
 
     rlnConfig = cfg;
     rlnConfig.enabled = true;
+    // The setter is no nim-ffi entry point, so it does not bring the Nim runtime
+    // up; before that its lock is uninitialized (fatal on Windows). This call does.
+    (void)logosdelivery_version();
     if (logosdelivery_rln_set_plugin(&rlnPlugin, this) != 0) {
         rlnConfig = DeliveryRlnConfig{};
         return "failed to install the RLN plugin";

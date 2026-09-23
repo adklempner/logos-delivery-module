@@ -9,19 +9,17 @@
   };
 
   inputs = {
-    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.0";
+    logos-module-builder.url = "github:logos-co/logos-module-builder/0.3.1";
     nix-bundle-lgx.url = "github:logos-co/nix-bundle-lgx";
-    logos-delivery.url = "git+https://github.com/logos-messaging/logos-delivery?submodules=1&ref=master&rev=05600659d4a695ff65f0113b9cc275211c73e622";
+    logos-delivery.url = "git+https://github.com/logos-messaging/logos-delivery?submodules=1";
     # TinyCBOR for the generated binding: nim-ffi's vendored copy, at the rev
     # logos-delivery's nimble.lock pins.
     nim-ffi = {
       url = "github:logos-messaging/nim-ffi/b9c4d26de013bba098e810f70074cbba6c5b4c15";
       flake = false;
     };
-    # The RLN API module. The input name is load-bearing and cannot be chosen
-    # freely: logos-module-builder resolves each metadata.json#optional_dependencies
-    # entry as the flake input of the SAME name and generates bindings from
-    # its published <name>.lidl.
+    # The name is load-bearing: the builder resolves each optional_dependencies
+    # entry as the input of that name and generates bindings from its LIDL.
     liblogos_rln_module.url = "git+https://github.com/logos-co/logos-rln-modules?ref=main&rev=65697028baffc072e1aeebaec7c7e35e7e12cab1&dir=logos-rln-module";
   };
 
@@ -41,6 +39,10 @@
           logosdelivery = {
             input = inputs.logos-delivery;
             packages.default = "liblogosdelivery";
+            systems.x86_64-windows = {
+              system = "x86_64-linux";
+              packages.default = "liblogosdelivery-windows-x86_64";
+            };
           };
           # Bundle librln.dylib alongside liblogosdelivery.dylib so the transitive
           # dep resolves at runtime (and during logos-cpp-generator dlopen).
@@ -50,6 +52,10 @@
           rln = {
             input = inputs.logos-delivery;
             packages.default = "rln";
+            systems.x86_64-windows = {
+              system = "x86_64-linux";
+              packages.default = "rln-windows-x86_64";
+            };
           };
         };
         preConfigure = stageTinycbor;
