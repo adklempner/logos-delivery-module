@@ -115,14 +115,18 @@ private:
     // callback needs no bridge pointer.
     static void respond(uint64_t reqId, const std::string& out);
 
+    // First line of every op entry point: a bridge that is not serving still
+    // owes the library an answer for this reqId. Returns true when it answered
+    // and the caller must stop.
+    bool rejectIfNotEnabled(Op op, uint64_t reqId) const;
+
     // Reduces a lifecycle call to this bridge's convention: empty on success,
     // error text otherwise.
     static std::string lifecycleResult(Op op, const StdLogosResult& r,
                                        const logos::CallError& err);
 
     std::atomic<bool> m_enabled{false};
-    // Set in init(); owned by modules(). enable() refuses without it and the
-    // plugin gates every entry point on enabled(), so the op paths below do
-    // not re-check it — a bridge that is enabled has a client.
+    // Set in init(); owned by modules(). enable() refuses without it, so
+    // m_enabled implies a client and the op paths test only m_enabled.
     LiblogosRlnModule* m_rlnModule = nullptr;
 };

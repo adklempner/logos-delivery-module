@@ -964,6 +964,26 @@ LOGOS_TEST(rln_bridge_provider_refusal_is_permanent) {
                     std::string("rln_bridge_dispatch"));
 }
 
+LOGOS_TEST(rln_bridge_disabled_still_answers_the_request) {
+    auto t = LogosTestContext("delivery_module");
+    delivery_test_rln::resetRlnMockState();
+    RlnBridge bridge; // never init()ed, so never enabled
+
+    bridge.validateProof(10, "reg", "rln-id", "deadbeef", 1700000000, "{}");
+
+    // The library is owed an answer for every reqId it raises, including the
+    // ones this bridge cannot serve — an unserved request only goes quiet and
+    // expires against the library's own budget.
+    LOGOS_ASSERT_TRUE(delivery_test_rln::g_responseFired);
+    LOGOS_ASSERT_EQ(delivery_test_rln::g_lastResponseReqId, static_cast<uint64_t>(10));
+    const auto reply = nlohmann::json::parse(delivery_test_rln::g_lastResponseJson);
+    const auto inner = nlohmann::json::parse(reply["error"].get<std::string>());
+    // Permanent: enable() happens once, at createNode. Retrying cannot help.
+    LOGOS_ASSERT_EQ(inner["class"].get<std::string>(), std::string("permanent"));
+    LOGOS_ASSERT_EQ(inner["kind"].get<std::string>(),
+                    std::string("rln_bridge_disabled"));
+}
+
 LOGOS_TEST(rln_bridge_enable_refuses_without_a_client) {
     auto t = LogosTestContext("delivery_module");
     RlnBridge bridge; // no init(): nothing to call

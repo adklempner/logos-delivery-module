@@ -16,6 +16,7 @@ constexpr const char* kPermanent = "permanent";
 constexpr const char* kTransportKind = "rln_bridge_transport";
 constexpr const char* kRefusalKind = "rln_bridge_dispatch";
 constexpr const char* kDecodeKind = "rln_bridge_decode";
+constexpr const char* kDisabledKind = "rln_bridge_disabled";
 
 // A provider REFUSAL: the module was reached and declined the call itself —
 // the method is unknown, the arguments do not fit, dispatch failed. The
@@ -180,6 +181,21 @@ std::string RlnBridge::tstrReply(Op op, const std::string& value)
     return value;
 }
 
+// Permanent, not transient: enable() runs once at createNode, so a bridge that
+// is not serving now never will be for this node. Told that, the library can
+// fail the request instead of retrying it until its own budget runs out.
+bool RlnBridge::rejectIfNotEnabled(Op op, uint64_t reqId) const
+{
+    if (m_enabled.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const char* why = m_rlnModule ? "rln bridge is not enabled"
+                                  : "rln-module client is not set for rln bridge";
+    respond(reqId, transportFail(op, kPermanent, kDisabledKind,
+                                 std::string(opName(op)) + ": " + why));
+    return true;
+}
+
 std::string RlnBridge::lifecycleResult(Op op, const StdLogosResult& r,
                                        const logos::CallError& err)
 {
@@ -218,12 +234,11 @@ std::string RlnBridge::stopBackend()
     return lifecycleResult(Op::Stop, r, err);
 }
 
-// The op entry points below are reached only through the plugin's rln_*
-// callbacks, each of which calls them under `if (rlnBridge->enabled())`. That
-// guard is the one the delivery library can see: when the bridge is not
-// serving, no answer is manufactured here and the request stays open for
-// whoever else may answer it. So these paths do not re-check the client —
-// enable() already refused without one.
+// The op entry points below carry no precondition: every one of them answers
+// the reqId it was handed, whether or not this bridge can serve it. A caller
+// that checked first would decide the library's fate for it — an unserved
+// request would simply go quiet and expire against the library's own budget,
+// with nothing said about why.
 //
 // Every callback below captures EXACTLY [reqId] — never `this`, never [=],
 // which in a member function captures this implicitly. The callback can run on
@@ -236,6 +251,9 @@ std::string RlnBridge::stopBackend()
 void RlnBridge::getMembershipState(uint64_t reqId, std::string registryId,
                                    std::string rlnIdentifier)
 {
+    if (rejectIfNotEnabled(Op::GetState, reqId)) {
+        return;
+    }
     m_rlnModule->get_membership_stateAsyncResult(
         registryId, rlnIdentifier,
         [reqId](logos::AsyncResult<std::string> r) {
@@ -248,6 +266,9 @@ void RlnBridge::getMembershipState(uint64_t reqId, std::string registryId,
 void RlnBridge::getEpochQuota(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, uint64_t timestamp)
 {
+    if (rejectIfNotEnabled(Op::GetQuota, reqId)) {
+        return;
+    }
     m_rlnModule->get_epoch_quotaAsyncResult(
         registryId, rlnIdentifier, std::to_string(timestamp),
         [reqId](logos::AsyncResult<StdLogosResult> r) {
@@ -261,6 +282,9 @@ void RlnBridge::generateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp)
 {
+    if (rejectIfNotEnabled(Op::Generate, reqId)) {
+        return;
+    }
     m_rlnModule->generate_proofAsyncResult(
         registryId, rlnIdentifier, signalHex, std::to_string(timestamp),
         [reqId](logos::AsyncResult<StdLogosResult> r) {
@@ -274,6 +298,9 @@ void RlnBridge::validateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp, std::string proofJson)
 {
+    if (rejectIfNotEnabled(Op::Validate, reqId)) {
+        return;
+    }
     m_rlnModule->validate_proofAsyncResult(
         registryId, rlnIdentifier, signalHex, std::to_string(timestamp), proofJson,
         [reqId](logos::AsyncResult<StdLogosResult> r) {
