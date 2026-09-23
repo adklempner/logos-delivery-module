@@ -51,15 +51,15 @@ RlnBridge::RlnBridge() = default;
 // no bridge state, which is what makes that safe rather than lucky.
 RlnBridge::~RlnBridge() = default;
 
-void RlnBridge::init(LiblogosRlnModule* typed)
+void RlnBridge::init(LiblogosRlnModule* rlnModule)
 {
-    m_typed = typed;
+    m_rlnModule = rlnModule;
 }
 
 std::string RlnBridge::enable()
 {
-    if (!m_typed) {
-        return "rln bridge has no typed client";
+    if (!m_rlnModule) {
+        return "rln-module client is not set for rln bridge";
     }
     // No contact with the RLN module here: at enable() time (createNode) the
     // registry connection is not up yet, so acquiring the remote object would
@@ -180,17 +180,6 @@ std::string RlnBridge::tstrReply(Op op, const std::string& value)
     return value;
 }
 
-bool RlnBridge::readyOrAnswer(Op op, uint64_t reqId) const
-{
-    if (m_typed) {
-        return true;
-    }
-    respond(reqId, transportFail(op, kTransient, kTransportKind,
-                                 std::string(opName(op))
-                                     + ": rln bridge has no typed client"));
-    return false;
-}
-
 std::string RlnBridge::lifecycleResult(Op op, const StdLogosResult& r,
                                        const logos::CallError& err)
 {
@@ -215,7 +204,7 @@ std::string RlnBridge::startBackend(std::string configJson)
     }
     logos::CallError err;
     const StdLogosResult r =
-        m_typed->start(configJson, &err, timeoutMsFor(Op::Start));
+        m_rlnModule->start(configJson, &err, timeoutMsFor(Op::Start));
     return lifecycleResult(Op::Start, r, err);
 }
 
@@ -225,10 +214,17 @@ std::string RlnBridge::stopBackend()
         return "rln bridge is not enabled";
     }
     logos::CallError err;
-    const StdLogosResult r = m_typed->stop(&err, timeoutMsFor(Op::Stop));
+    const StdLogosResult r = m_rlnModule->stop(&err, timeoutMsFor(Op::Stop));
     return lifecycleResult(Op::Stop, r, err);
 }
 
+// The op entry points below are reached only through the plugin's rln_*
+// callbacks, each of which calls them under `if (rlnBridge->enabled())`. That
+// guard is the one the delivery library can see: when the bridge is not
+// serving, no answer is manufactured here and the request stays open for
+// whoever else may answer it. So these paths do not re-check the client —
+// enable() already refused without one.
+//
 // Every callback below captures EXACTLY [reqId] — never `this`, never [=],
 // which in a member function captures this implicitly. The callback can run on
 // the client's thread after this object is gone, so it calls only static
@@ -240,10 +236,7 @@ std::string RlnBridge::stopBackend()
 void RlnBridge::getMembershipState(uint64_t reqId, std::string registryId,
                                    std::string rlnIdentifier)
 {
-    if (!readyOrAnswer(Op::GetState, reqId)) {
-        return;
-    }
-    m_typed->get_membership_stateAsyncResult(
+    m_rlnModule->get_membership_stateAsyncResult(
         registryId, rlnIdentifier,
         [reqId](logos::AsyncResult<std::string> r) {
             respond(reqId, r.ok() ? tstrReply(Op::GetState, r.value)
@@ -255,10 +248,7 @@ void RlnBridge::getMembershipState(uint64_t reqId, std::string registryId,
 void RlnBridge::getEpochQuota(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, uint64_t timestamp)
 {
-    if (!readyOrAnswer(Op::GetQuota, reqId)) {
-        return;
-    }
-    m_typed->get_epoch_quotaAsyncResult(
+    m_rlnModule->get_epoch_quotaAsyncResult(
         registryId, rlnIdentifier, std::to_string(timestamp),
         [reqId](logos::AsyncResult<StdLogosResult> r) {
             respond(reqId, r.ok() ? resultReply(Op::GetQuota, r.value)
@@ -271,10 +261,7 @@ void RlnBridge::generateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp)
 {
-    if (!readyOrAnswer(Op::Generate, reqId)) {
-        return;
-    }
-    m_typed->generate_proofAsyncResult(
+    m_rlnModule->generate_proofAsyncResult(
         registryId, rlnIdentifier, signalHex, std::to_string(timestamp),
         [reqId](logos::AsyncResult<StdLogosResult> r) {
             respond(reqId, r.ok() ? resultReply(Op::Generate, r.value)
@@ -287,10 +274,7 @@ void RlnBridge::validateProof(uint64_t reqId, std::string registryId,
                               std::string rlnIdentifier, std::string signalHex,
                               uint64_t timestamp, std::string proofJson)
 {
-    if (!readyOrAnswer(Op::Validate, reqId)) {
-        return;
-    }
-    m_typed->validate_proofAsyncResult(
+    m_rlnModule->validate_proofAsyncResult(
         registryId, rlnIdentifier, signalHex, std::to_string(timestamp), proofJson,
         [reqId](logos::AsyncResult<StdLogosResult> r) {
             respond(reqId, r.ok() ? resultReply(Op::Validate, r.value)

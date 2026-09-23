@@ -964,18 +964,15 @@ LOGOS_TEST(rln_bridge_provider_refusal_is_permanent) {
                     std::string("rln_bridge_dispatch"));
 }
 
-LOGOS_TEST(rln_bridge_without_a_client_still_answers_the_request) {
+LOGOS_TEST(rln_bridge_enable_refuses_without_a_client) {
     auto t = LogosTestContext("delivery_module");
-    delivery_test_rln::resetRlnMockState();
     RlnBridge bridge; // no init(): nothing to call
 
-    bridge.validateProof(10, "reg", "rln-id", "deadbeef", 1700000000, "{}");
-
-    // The library is owed an answer for every reqId it raises, including the
-    // ones this bridge cannot serve — otherwise the request sits until the
-    // library's own budget expires.
-    LOGOS_ASSERT_TRUE(delivery_test_rln::g_responseFired);
-    LOGOS_ASSERT_EQ(delivery_test_rln::g_lastResponseReqId, static_cast<uint64_t>(10));
+    // The op entry points dereference the client without checking it, which is
+    // safe only because this refusal holds: an un-enabled bridge is never
+    // asked, since the plugin gates every callback on enabled().
+    LOGOS_ASSERT_FALSE(bridge.enable().empty());
+    LOGOS_ASSERT_FALSE(bridge.enabled());
 }
 
 LOGOS_TEST(rln_bridge_start_backend_reports_the_call_error) {

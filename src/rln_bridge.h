@@ -56,9 +56,9 @@ public:
     RlnBridge& operator=(const RlnBridge&) = delete;
 
     // Second-phase constructor: stores the typed client. Safe to call more
-    // than once. `typed` is borrowed from modules().liblogos_rln_module, which
-    // outlives this object.
-    void init(LiblogosRlnModule* typed);
+    // than once. `rlnModule` is borrowed from modules().liblogos_rln_module,
+    // which outlives this object.
+    void init(LiblogosRlnModule* rlnModule);
 
     // Enable answering of RLN requests in-process.
     // Returns an error string or empty on success.
@@ -120,10 +120,9 @@ private:
     static std::string lifecycleResult(Op op, const StdLogosResult& r,
                                        const logos::CallError& err);
 
-    // First line of every op entry point: without a client there is nothing to
-    // call, and the library is still owed an answer for this reqId.
-    bool readyOrAnswer(Op op, uint64_t reqId) const;
-
     std::atomic<bool> m_enabled{false};
-    LiblogosRlnModule* m_typed = nullptr; // set in init(); owned by modules()
+    // Set in init(); owned by modules(). enable() refuses without it and the
+    // plugin gates every entry point on enabled(), so the op paths below do
+    // not re-check it — a bridge that is enabled has a client.
+    LiblogosRlnModule* m_rlnModule = nullptr;
 };
